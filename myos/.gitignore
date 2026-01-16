@@ -1,0 +1,11 @@
+
+*.bin
+*.img
+*.o
+*.elf
+
+
+.vscode/
+*.swp
+*.swo
+*.DS_Store
