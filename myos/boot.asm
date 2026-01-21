@@ -1,4 +1,3 @@
-; boot.asm
 [BITS 16]
 [ORG 0x7C00]
 
@@ -11,63 +10,67 @@ start:
     mov sp, 0x7C00
 
     mov si, msg
-.print:
+.loop:
     lodsb
     or al, al
     jz load_kernel
     mov ah, 0x0E
     int 0x10
-    jmp .print
+    jmp .loop
 
 load_kernel:
-    mov ah, 0x02        ; BIOS read sector
-    mov al, 4           ; read 4 sectors (adjust if needed)
+    mov dl, 0x00
+    mov ah, 0x00
+    int 0x13
+    
+    mov ah, 0x02
+    mov al, 4              ; 4 sectors = 2048 bytes
     mov ch, 0
     mov cl, 2
     mov dh, 0
-    mov dl, 0x80
     mov bx, 0x1000
     int 0x13
+    jc disk_error
 
-    ; switch to protected mode
-    cli
-    lgdt [gdt_descriptor]
+    lgdt [gdt_desc]
     mov eax, cr0
-    or eax, 1
+    or al, 1
     mov cr0, eax
-    jmp 0x08:protected_mode_entry
+    jmp 0x08:protected_mode
+
+disk_error:
+    mov si, err
+.loop_err:
+    lodsb
+    or al, al
+    jz .halt
+    mov ah, 0x0E
+    int 0x10
+    jmp .loop_err
+.halt:
+    hlt
 
 gdt_start:
-    dd 0
-    dd 0
-    dd 0x0000FFFF
-    dd 0x00CF9A00      ; code segment
-    dd 0
-    dd 0x00CF9200      ; data segment
-gdt_end:
-
-gdt_descriptor:
-    dw gdt_end - gdt_start - 1
+    dq 0x0
+    dq 0x00CF9A000000FFFF
+    dq 0x00CF92000000FFFF
+gdt_desc:
+    dw 24
     dd gdt_start
 
 [BITS 32]
-protected_mode_entry:
+protected_mode:
     mov ax, 0x10
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
     mov ss, ax
-    mov esp, 0x9FC00
+    mov esp, 0x90000
+    jmp 0x1000
 
-    jmp 0x1000          ; jump directly to C kernel address
-
-hang:
-    cli
-    hlt
-    jmp hang
-
-msg db "Bootloader OK", 0
+msg db "Bootloader OK",13,10,0
+err db "Disk error",13,10,0
 
 times 510-($-$$) db 0
 dw 0xAA55
