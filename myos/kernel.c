@@ -1,6 +1,7 @@
 void kernel_main(void) {
     char* video = (char*)0xB8000;
     int cursor = 0;
+    int prompt_end = 0;
     unsigned char prev_scancode = 0;
     
     // Clear screen + welcome
@@ -11,11 +12,23 @@ void kernel_main(void) {
     const char* msg = "Smiggles\n> ";
     int i = 0;
     while (msg[i]) {
-        video[cursor*2] = msg[i];
-        video[cursor*2+1] = 0x0F;
-        cursor++;
+        if (msg[i] == '\n') {
+            cursor = ((cursor / 80) + 1) * 80;
+        } else {
+            video[cursor*2] = msg[i];
+            video[cursor*2+1] = 0x0F;
+            cursor++;
+        }
         i++;
     }
+    prompt_end = cursor;
+
+    // Set hardware cursor to match logical cursor
+    unsigned short pos = cursor;
+    asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0F), "Nd"((unsigned short)0x3D4));
+    asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos & 0xFF)), "Nd"((unsigned short)0x3D5));
+    asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
+    asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
     
     while (1) {
         unsigned char scancode;
@@ -57,7 +70,7 @@ void kernel_main(void) {
                 if (c == '\n') {
                     cursor = ((cursor / 80) + 1) * 80;
                 } 
-                else if (c == 8 && cursor > 0) {
+                else if (c == 8 && cursor > prompt_end) {
                     cursor--;
                     video[cursor*2] = ' ';
                     video[cursor*2+1] = 0x07;
@@ -67,6 +80,12 @@ void kernel_main(void) {
                     video[cursor*2+1] = 0x0F;
                     cursor++;
                 }
+                // Update hardware cursor after every change
+                unsigned short pos = cursor;
+                asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0F), "Nd"((unsigned short)0x3D4));
+                asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos & 0xFF)), "Nd"((unsigned short)0x3D5));
+                asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
+                asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
             }
         }
     }
