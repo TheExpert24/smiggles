@@ -1,3 +1,25 @@
+static int mini_strcmp(const char* a, const char* b) {
+    int i = 0;
+    while (a[i] && b[i]) {
+        if (a[i] != b[i]) return a[i] - b[i];
+        i++;
+    }
+    return a[i] - b[i];
+}
+
+static void handle_command(const char* cmd, char* video, int* cursor, const char* input, const char* output, unsigned char color) {
+    if (mini_strcmp(cmd, input) == 0) {
+        *cursor = ((*cursor / 80) + 1) * 80;
+        const char* out = output;
+        int k = 0;
+        while (out[k] && *cursor < 80*25 - 1) {
+            video[(*cursor)*2] = out[k];
+            video[(*cursor)*2+1] = color;
+            (*cursor)++;
+            k++;
+        }
+    }
+}
 
 void kernel_main(void) {
     char* video = (char*)0xB8000;
@@ -119,6 +141,8 @@ void kernel_main(void) {
                     // Null-terminate and check command
                     cmd_buf[cmd_len] = 0;
                     handle_command(cmd_buf, video, &cursor, "ping", "pong", 0x0A);
+                    handle_command(cmd_buf, video, &cursor, "help", "Lock in brutha", 0x0A);
+                    handle_command(cmd_buf, video, &cursor, "about", "Smiggles v1.0.0 \n Jules Miller and Vajra Vanukuri", 0x0A);
                     // New prompt
                     cursor = ((cursor / 80) + 1) * 80;
                     const char* prompt = "> ";
@@ -166,25 +190,3 @@ void kernel_main(void) {
 }
 
 
-static int mini_strcmp(const char* a, const char* b) {
-    int i = 0;
-    while (a[i] && b[i]) {
-        if (a[i] != b[i]) return a[i] - b[i];
-        i++;
-    }
-    return a[i] - b[i];
-}
-
-static void handle_command(const char* cmd, char* video, int* cursor, const char* input, const char* output, unsigned char color) {
-    if (mini_strcmp(cmd, input) == 0) {
-        *cursor = ((*cursor / 80) + 1) * 80;
-        const char* out = output;
-        int k = 0;
-        while (out[k] && *cursor < 80*25 - 1) {
-            video[(*cursor)*2] = out[k];
-            video[(*cursor)*2+1] = color;
-            (*cursor)++;
-            k++;
-        }
-    }
-}
