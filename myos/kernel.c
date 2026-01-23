@@ -109,7 +109,7 @@ void kernel_main(void) {
     unsigned char prev_scancode = 0;
     int shift = 0;
 
-    //clear screen
+    
     for (int i = 0; i < 80*25*2; i += 2) {
         video[i] = ' ';
         video[i+1] = 0x07;
@@ -124,19 +124,24 @@ void kernel_main(void) {
         "|_____  ||       ||   | |   ||  ||   ||  ||   |___ |    ___||_____  |",
         " _____| || ||_|| ||   | |   |_| ||   |_| ||       ||   |___  _____| |",
         "|_______||_|   |_||___| |_______||_______||_______||_______||_______|"
-    
     };
     //yellow
     unsigned char rainbow[7] = {0x0E, 0x0E, 0x0E, 0x0E, 0x0E, 0x0E, 0x0E};
     int art_lines = 7;
     for (int l = 0; l < art_lines; l++) {
+        
+        for (int j = 0; j < 80; j++) {
+            video[(l*80+j)*2] = ' ';
+            video[(l*80+j)*2+1] = rainbow[l % 7];
+        }
+        
         for (int j = 0; smiggles_art[l][j] && j < 80; j++) {
             video[(l*80+j)*2] = smiggles_art[l][j];
             video[(l*80+j)*2+1] = rainbow[j % 7];
         }
     }
 
-    //prompt
+    
     cursor = art_lines * 80;
     const char* msg = "> ";
     int i = 0;
@@ -149,14 +154,14 @@ void kernel_main(void) {
     prompt_end = cursor;
     line_start = cursor;
 
-    //cursor stuff
+    
     unsigned short pos = cursor;
     asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0F), "Nd"((unsigned short)0x3D4));
     asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos & 0xFF)), "Nd"((unsigned short)0x3D5));
     asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
     asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
 
-    // Command buffer
+    
     char cmd_buf[64];
     int cmd_len = 0;
 
@@ -191,7 +196,7 @@ void kernel_main(void) {
                 [0x2B] = '\\', [0x2C] = 'z', [0x2D] = 'x', [0x2E] = 'c', [0x2F] = 'v', [0x30] = 'b', [0x31] = 'n', [0x32] = 'm',
                 [0x33] = ',', [0x34] = '.', [0x35] = '/', [0x39] = ' ', [0x1C] = '\n', [0x0E] = 8, // backspace
                 [0x0F] = '\t',
-                //numpad keys
+                
                 [0x4F] = '1', [0x50] = '2', [0x51] = '3', [0x4B] = '4', [0x4C] = '5', [0x4D] = '6', [0x47] = '7', [0x48] = '8', [0x49] = '9', [0x52] = '0',
                 [0x53] = '.', [0x37] = '*', [0x4A] = '-', [0x4E] = '+', [0x35] = '/',
             };
@@ -206,7 +211,6 @@ void kernel_main(void) {
                 [0x2B] = '|', [0x2C] = 'Z', [0x2D] = 'X', [0x2E] = 'C', [0x2F] = 'V', [0x30] = 'B', [0x31] = 'N', [0x32] = 'M',
                 [0x33] = '<', [0x34] = '>', [0x35] = '?', [0x39] = ' ', [0x1C] = '\n', [0x0E] = 8, // backspace
                 [0x0F] = '\t',
-
                 [0x4F] = '1', [0x50] = '2', [0x51] = '3', [0x4B] = '4', [0x4C] = '5', [0x4D] = '6', [0x47] = '7', [0x48] = '8', [0x49] = '9', [0x52] = '0',
                 [0x53] = '.', [0x37] = '*', [0x4A] = '-', [0x4E] = '+', [0x35] = '/',
             };
@@ -218,7 +222,7 @@ void kernel_main(void) {
 
             if (c) {
                 if (c == '\n') {
-                    // Null-terminate and check command
+                    
                     cmd_buf[cmd_len] = 0;
                     // Print command: print "text"
                     if (cmd_buf[0] == 'p' && cmd_buf[1] == 'r' && cmd_buf[2] == 'i' && cmd_buf[3] == 'n' && cmd_buf[4] == 't' && cmd_buf[5] == ' ' && cmd_buf[6] == '"') {
@@ -279,4 +283,3 @@ void kernel_main(void) {
         }
     }
 }
-
