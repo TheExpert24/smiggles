@@ -16,10 +16,10 @@ static void scroll_screen(char* video) {
 // --- RAM-based file system ---
 
 #define MAX_FILES 8
-#define MAX_FILE_NAME 16
+#define MAX_FILE_NAME 32
 #define MAX_FILE_SIZE 128
 #define MAX_DIRS 4
-#define MAX_DIR_NAME 16
+#define MAX_DIR_NAME 32
 
 typedef struct {
     char name[MAX_DIR_NAME];
@@ -35,8 +35,6 @@ static int current_dir = 0; // index in dir_table
 static void print_string(const char* str, int len, char* video, int* cursor, unsigned char color);
 static void print_string_sameline(const char* str, int len, char* video, int* cursor, unsigned char color);
 
-
-
 typedef struct {
     char name[MAX_FILE_NAME];
     char data[MAX_FILE_SIZE];
@@ -46,6 +44,36 @@ typedef struct {
 
 static RamFile file_table[MAX_FILES];
 static int file_count = 0;
+
+// History tracking
+static char history[10][64]; // Store up to 10 commands, each up to 64 characters
+static int history_count = 0;
+
+// Add a command to history
+static void add_to_history(const char* cmd) {
+    if (history_count < 10) {
+        int i = 0;
+        while (cmd[i] && i < 63) {
+            history[history_count][i] = cmd[i];
+            i++;
+        }
+        history[history_count][i] = 0;
+        history_count++;
+    } else {
+        // Shift history up to make room for the new command
+        for (int i = 1; i < 10; i++) {
+            for (int j = 0; j < 64; j++) {
+                history[i - 1][j] = history[i][j];
+            }
+        }
+        int i = 0;
+        while (cmd[i] && i < 63) {
+            history[9][i] = cmd[i];
+            i++;
+        }
+        history[9][i] = 0;
+    }
+}
 
 // Find file index by name, or -1 if not found
 // Find file index by name in current directory, or -1 if not found
@@ -102,15 +130,22 @@ static void handle_echo_command(const char* text, const char* filename, char* vi
         }
         idx = file_count++;
         int j = 0;
-        while (filename[j] && j < MAX_FILE_NAME-1) {
+        while (filename[j] && j < MAX_FILE_NAME - 1) {
             file_table[idx].name[j] = filename[j];
             j++;
+        }
+        // Ensure the file has a ".txt" extension if none is provided
+        if (j < MAX_FILE_NAME - 4 && !(filename[j - 4] == '.' && filename[j - 3] == 't' && filename[j - 2] == 'x' && filename[j - 1] == 't')) {
+            file_table[idx].name[j++] = '.';
+            file_table[idx].name[j++] = 't';
+            file_table[idx].name[j++] = 'x';
+            file_table[idx].name[j++] = 't';
         }
         file_table[idx].name[j] = 0;
         file_table[idx].dir = current_dir;
     }
     int len = 0;
-    while (text[len] && len < MAX_FILE_SIZE-1) {
+    while (text[len] && len < MAX_FILE_SIZE - 1) {
         file_table[idx].data[len] = text[len];
         len++;
     }
@@ -190,6 +225,36 @@ static void handle_time_command(char* video, int* cursor, unsigned char color) {
     print_string_sameline(" UTC", 4, video, cursor, color);
 }
 
+// Clear screen command
+static void handle_clear_command(char* video, int* cursor) {
+    for (int i = 0; i < 80 * 25 * 2; i += 2) {
+        video[i] = ' ';
+        video[i + 1] = 0x07;
+    }
+    *cursor = 0;
+}
+
+// Move/rename file command
+static void handle_mv_command(const char* oldname, const char* newname, char* video, int* cursor) {
+    int idx = find_file(oldname);
+    if (idx == -1) {
+        print_string("File not found", 14, video, cursor, 0xC);
+        return;
+    }
+    int i = 0;
+    while (newname[i] && i < MAX_FILE_NAME - 1) {
+        file_table[idx].name[i] = newname[i];
+        i++;
+    }
+    file_table[idx].name[i] = 0;
+    print_string("File renamed", 12, video, cursor, 0xA);
+}
+
+// Fix handle_pwd_command to ensure it resets the cursor and displays the prompt
+// Fixed pwd command - only prints path, does NOT touch cursor or prompt
+
+
+
 //for basic call and reply commands
 static void handle_command(const char* cmd, char* video, int* cursor, const char* input, const char* output, unsigned char color) {
     if (mini_strcmp(cmd, input) == 0) {
@@ -197,7 +262,6 @@ static void handle_command(const char* cmd, char* video, int* cursor, const char
 
     }
 }
-
 
 //main command dispatcher
 static void handle_mkdir_command(const char* dirname, char* video, int* cursor, unsigned char color_unused) {
@@ -244,33 +308,170 @@ static void handle_cd_command(const char* dirname, char* video, int* cursor, uns
     print_string("No such dir", 11, video, cursor, 0xC); // error
 }
 
+// Remove empty directory command
+static void handle_rmdir_command(const char* dirname, char* video, int* cursor) {
+    for (int i = 0; i < dir_count; i++) {
+        if (dir_table[i].used && dir_table[i].parent == current_dir && mini_strcmp(dir_table[i].name, dirname) == 0) {
+            // Check if directory is empty
+            for (int j = 0; j < dir_count; j++) {
+                if (dir_table[j].used && dir_table[j].parent == i) {
+                    print_string("Directory not empty", 20, video, cursor, 0xC);
+                    return;
+                }
+            }
+            for (int j = 0; j < file_count; j++) {
+                if (file_table[j].dir == i) {
+                    print_string("Directory not empty", 20, video, cursor, 0xC);
+                    return;
+                }
+            }
+            dir_table[i].used = 0;
+            print_string("Directory removed", 18, video, cursor, 0xA);
+            return;
+        }
+    }
+    print_string("No such directory", 18, video, cursor, 0xC);
+}
+
+// Custom integer to string conversion
+static void int_to_str(int value, char* buf) {
+    char temp[12];
+    int i = 0, j = 0;
+    int is_negative = value < 0;
+    if (is_negative) value = -value;
+    do {
+        temp[i++] = '0' + (value % 10);
+        value /= 10;
+    } while (value > 0);
+    if (is_negative) temp[i++] = '-';
+    while (i > 0) buf[j++] = temp[--i];
+    buf[j] = 0;
+}
+
+// Custom string concatenation
+static void str_concat(char* dest, const char* src) {
+    while (*dest) dest++;
+    while (*src) *dest++ = *src++;
+    *dest = 0;
+}
+
+// Show RAM/file table usage command
+static void handle_free_command(char* video, int* cursor) {
+    char buf[64] = "Files: ";
+    char temp[12];
+    int_to_str(file_count, temp);
+    str_concat(buf, temp);
+    str_concat(buf, "/");
+    int_to_str(MAX_FILES, temp);
+    str_concat(buf, temp);
+    str_concat(buf, ", Dirs: ");
+    int_to_str(dir_count, temp);
+    str_concat(buf, temp);
+    str_concat(buf, "/");
+    int_to_str(MAX_DIRS, temp);
+    str_concat(buf, temp);
+    print_string(buf, -1, video, cursor, 0xB);
+}
+
+// Filesystem usage summary command
+static void handle_df_command(char* video, int* cursor) {
+    char buf[64] = "Used files: ";
+    char temp[12];
+    int_to_str(file_count, temp);
+    str_concat(buf, temp);
+    str_concat(buf, ", Free: ");
+    int_to_str(MAX_FILES - file_count, temp);
+    str_concat(buf, temp);
+    print_string(buf, -1, video, cursor, 0xB);
+}
+
+// Detailed version info command
+static void handle_ver_command(char* video, int* cursor) {
+    print_string("Smiggles OS v1.0.0\nDeveloped by Jules Miller and Vajra Vanukuri", -1, video, cursor, 0xD);
+}
+
+// System uptime command
+static void handle_uptime_command(char* video, int* cursor) {
+    static int ticks = 0; // Increment this in a timer interrupt handler
+    char buf[64] = "Uptime: ";
+    char temp[12];
+    int_to_str(ticks / 18, temp); // Assuming 18.2 ticks per second
+    str_concat(buf, temp);
+    str_concat(buf, " seconds");
+    print_string(buf, -1, video, cursor, 0xB);
+}
+
+// Halt command
+static void handle_halt_command(char* video, int* cursor) {
+    handle_clear_command(video, cursor);
+    print_string("System halted", 13, video, cursor, 0xC);
+    while (1) {}
+}
+
+// Reboot command
+static void handle_reboot_command() {
+    asm volatile ("int $0x19"); // BIOS reboot interrupt
+}
+
+// Custom function to convert a byte to a hexadecimal string
+static void byte_to_hex(unsigned char byte, char* buf) {
+    const char hex_chars[] = "0123456789ABCDEF";
+    buf[0] = hex_chars[(byte >> 4) & 0xF];
+    buf[1] = hex_chars[byte & 0xF];
+    buf[2] = ' ';
+    buf[3] = 0;
+}
+
+// Hexdump command
+static void handle_hexdump_command(const char* filename, char* video, int* cursor) {
+    int idx = find_file(filename);
+    if (idx == -1) {
+        print_string("File not found", 14, video, cursor, 0xC);
+        return;
+    }
+    char buf[4];
+    for (int i = 0; i < file_table[idx].size; i++) {
+        byte_to_hex((unsigned char)file_table[idx].data[i], buf);
+        print_string(buf, -1, video, cursor, 0xB);
+    }
+}
+
+// History command
+static void handle_history_command(char* video, int* cursor) {
+    for (int i = 0; i < history_count; i++) {
+        print_string(history[i], -1, video, cursor, 0xB);
+    }
+}
+
+// Dispatch command
 static void dispatch_command(const char* cmd, char* video, int* cursor) {
+    add_to_history(cmd); // Add the command to history
     if (mini_strcmp(cmd, "ping") == 0) {
         handle_command(cmd, video, cursor, "ping", "pong", 0xA); // confirmation
     } else if (mini_strcmp(cmd, "about") == 0) {
         handle_command(cmd, video, cursor, "about", "Smiggles v1.0.0\nJules Miller and Vajra Vanukuri", 0xD); // help/about
     } else if (mini_strcmp(cmd, "help") == 0) {
-        handle_command(cmd, video, cursor, "help", "Available commands:\nprint \"text\" (prints text)  \necho \"text\" > file.txt (creates file)  \nls (view all files)\ncat file.txt (read contents of file)\nrm file.txt (delete file)\nmkdir dirname (make dir)\ncd dirname (change dir)\ntime (displays time in UTC)", 0xD); // help/about
-        } else if (cmd[0] == 'm' && cmd[1] == 'k' && cmd[2] == 'd' && cmd[3] == 'i' && cmd[4] == 'r' && cmd[5] == ' ') {
-            int start = 6;
-            while (cmd[start] == ' ') start++;
-            char dirname[MAX_DIR_NAME];
-            int dn = 0;
-            while (cmd[start] && dn < MAX_DIR_NAME-1) {
-                dirname[dn++] = cmd[start++];
-            }
-            dirname[dn] = 0;
-            handle_mkdir_command(dirname, video, cursor, 0x0B);
-        } else if (cmd[0] == 'c' && cmd[1] == 'd' && cmd[2] == ' ') {
-            int start = 3;
-            while (cmd[start] == ' ') start++;
-            char dirname[MAX_DIR_NAME];
-            int dn = 0;
-            while (cmd[start] && dn < MAX_DIR_NAME-1) {
-                dirname[dn++] = cmd[start++];
-            }
-            dirname[dn] = 0;
-            handle_cd_command(dirname, video, cursor, 0x0B);
+        handle_command(cmd, video, cursor, "help", "Available commands:\nprint \"text\" (prints text)\necho \"text\" > file.txt (creates file)\nls (view all files)\ncat file.txt (read contents of file)\nrm file.txt (delete file)\nmkdir dirname (make dir)\ncd dirname (change dir)\ntime (displays time in UTC)\nclear/cls (clear screen)\nmv oldname newname (rename/move file)\nrmdir dirname (remove empty dir)\nfree (RAM/file table usage)\ndf (filesystem usage)\nver (version info)\nuptime (system uptime)\nhalt (shutdown)\nreboot (restart)\nhexdump file.txt (hex view of file)\nhistory (recent commands)", 0xD); // help/about
+    } else if (cmd[0] == 'm' && cmd[1] == 'k' && cmd[2] == 'd' && cmd[3] == 'i' && cmd[4] == 'r' && cmd[5] == ' ') {
+        int start = 6;
+        while (cmd[start] == ' ') start++;
+        char dirname[MAX_DIR_NAME];
+        int dn = 0;
+        while (cmd[start] && dn < MAX_DIR_NAME-1) {
+            dirname[dn++] = cmd[start++];
+        }
+        dirname[dn] = 0;
+        handle_mkdir_command(dirname, video, cursor, 0x0B);
+    } else if (cmd[0] == 'c' && cmd[1] == 'd' && cmd[2] == ' ') {
+        int start = 3;
+        while (cmd[start] == ' ') start++;
+        char dirname[MAX_DIR_NAME];
+        int dn = 0;
+        while (cmd[start] && dn < MAX_DIR_NAME-1) {
+            dirname[dn++] = cmd[start++];
+        }
+        dirname[dn] = 0;
+        handle_cd_command(dirname, video, cursor, 0x0B);
     } else if (mini_strcmp(cmd, "time") == 0) {
         handle_time_command(video, cursor, 0x0A);
     } else if (mini_strcmp(cmd, "ls") == 0) {
@@ -334,8 +535,40 @@ static void dispatch_command(const char* cmd, char* video, int* cursor) {
         }
         filename[fn] = 0;
         handle_echo_command(text, filename, video, cursor, 0x0A);
+    } else if (mini_strcmp(cmd, "clear") == 0 || mini_strcmp(cmd, "cls") == 0) {
+        handle_clear_command(video, cursor);
+    } else if (cmd[0] == 'm' && cmd[1] == 'v' && cmd[2] == ' ') {
+        int start = 3;
+        while (cmd[start] == ' ') start++;
+        char oldname[MAX_FILE_NAME], newname[MAX_FILE_NAME];
+        int oi = 0, ni = 0;
+        while (cmd[start] && cmd[start] != ' ' && oi < MAX_FILE_NAME - 1) oldname[oi++] = cmd[start++];
+        oldname[oi] = 0;
+        while (cmd[start] == ' ') start++;
+        while (cmd[start] && ni < MAX_FILE_NAME - 1) newname[ni++] = cmd[start++];
+        newname[ni] = 0;
+        handle_mv_command(oldname, newname, video, cursor);
+    } else if (mini_strcmp(cmd, "rmdir") == 0) {
+        handle_rmdir_command(cmd + 6, video, cursor);
+    } else if (mini_strcmp(cmd, "free") == 0) {
+        handle_free_command(video, cursor);
+    } else if (mini_strcmp(cmd, "df") == 0) {
+        handle_df_command(video, cursor);
+    } else if (mini_strcmp(cmd, "ver") == 0) {
+        handle_ver_command(video, cursor);
+    } else if (mini_strcmp(cmd, "uptime") == 0) {
+        handle_uptime_command(video, cursor);
+    } else if (mini_strcmp(cmd, "halt") == 0) {
+        handle_halt_command(video, cursor);
+    } else if (mini_strcmp(cmd, "reboot") == 0) {
+        handle_reboot_command();
+    } else if (cmd[0] == 'h' && cmd[1] == 'e' && cmd[2] == 'x' && cmd[3] == 'd' && cmd[4] == 'u' && cmd[5] == 'm' && cmd[6] == 'p') {
+        handle_hexdump_command(cmd + 8, video, cursor);
+    } else if (mini_strcmp(cmd, "history") == 0) {
+        handle_history_command(video, cursor);
     }
 }
+
 //print a string on NEW LINE with color
 static void print_string(const char* str, int len, char* video, int* cursor, unsigned char color) {
     *cursor = ((*cursor / 80) + 1) * 80; //this is what goes to the new line
@@ -402,9 +635,6 @@ static void print_string_sameline(const char* str, int len, char* video, int* cu
         i++;
     }
 }
-
-
-
 
 void kernel_main(void) {
     char* video = (char*)0xB8000;
