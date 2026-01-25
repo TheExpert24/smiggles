@@ -262,8 +262,9 @@ static int find_file(const char* name) {
 static void handle_ls_command(char* video, int* cursor, unsigned char color_unused) {
     int found = 0;
     //folders in current directory
-    for (int i = 0; i < dir_count; i++) {
-        if (dir_table[i].used && dir_table[i].parent == current_dir && i != current_dir) {
+    for (int i = 0; i < MAX_DIRS; i++) {
+        if (i == 0) continue; // skip root dir itself
+        if (dir_table[i].used && dir_table[i].parent == current_dir) {
             print_string(dir_table[i].name, -1, video, cursor, 0xB); 
             print_string_sameline("/", 1, video, cursor, 0xB);
             found = 1;
@@ -277,6 +278,33 @@ static void handle_ls_command(char* video, int* cursor, unsigned char color_unus
         }
     }
     if (!found) print_string("(empty)", 7, video, cursor, 0xB);
+}
+
+// Debug: list all directory slots
+static void handle_lsall_command(char* video, int* cursor) {
+    char buf[128];
+    for (int i = 0; i < MAX_DIRS; i++) {
+        int n = 0;
+        buf[n++] = '#';
+        if (i >= 10) buf[n++] = '0' + (i / 10);
+        buf[n++] = '0' + (i % 10);
+        buf[n++] = ':';
+        buf[n++] = ' ';
+        int j = 0;
+        while (dir_table[i].name[j] && n < 40) buf[n++] = dir_table[i].name[j++];
+        buf[n++] = ' ';
+        buf[n++] = '[';
+        buf[n++] = dir_table[i].used ? 'U' : 'u';
+        buf[n++] = ',';
+        // parent as signed int
+        int p = dir_table[i].parent;
+        if (p < 0) { buf[n++] = '-'; p = -p; }
+        if (p >= 10) buf[n++] = '0' + (p / 10);
+        buf[n++] = '0' + (p % 10);
+        buf[n++] = ']';
+        buf[n++] = 0;
+        print_string(buf, -1, video, cursor, 0xE);
+    }
 }
 
 //cat file.txt
@@ -431,17 +459,24 @@ static void handle_command(const char* cmd, char* video, int* cursor, const char
 //main command dispatcher
 static void handle_mkdir_command(const char* dirname, char* video, int* cursor, unsigned char color_unused) {
     // Check if subdir exists in current dir
-    for (int i = 0; i < dir_count; i++) {
+    // Check if subdir exists in current dir
+    for (int i = 0; i < MAX_DIRS; i++) {
         if (dir_table[i].used && dir_table[i].parent == current_dir && mini_strcmp(dir_table[i].name, dirname) == 0) {
             print_string("Directory exists", 16, video, cursor, 0xC); 
             return;
         }
     }
-    if (dir_count >= MAX_DIRS) {
+    int idx = -1;
+    for (int i = 1; i < MAX_DIRS; i++) { // start at 1, never overwrite root
+        if (!dir_table[i].used) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx == -1) {
         print_string("Dir table full", 14, video, cursor, 0xC); 
         return;
     }
-    int idx = dir_count++;
     int j = 0;
     while (dirname[j] && j < MAX_DIR_NAME-1) {
         dir_table[idx].name[j] = dirname[j];
@@ -450,6 +485,7 @@ static void handle_mkdir_command(const char* dirname, char* video, int* cursor, 
     dir_table[idx].name[j] = 0;
     dir_table[idx].used = 1;
     dir_table[idx].parent = current_dir;
+    if (idx >= dir_count) dir_count = idx + 1;
     print_string("Dir created", 11, video, cursor, 0xA); 
 }
 
@@ -619,6 +655,8 @@ static void dispatch_command(const char* cmd, char* video, int* cursor) {
         handle_command(cmd, video, cursor, "help", "Available commands:\nprint \"text\" (prints text)\necho \"text\" > file.txt (creates file)\nls (view all files)\ncat file.txt (read contents of file)\nrm file.txt (delete file)\nmkdir dirname (make dir)\ncd dirname (change dir)\ntime (displays time in UTC)\nclear/cls (clear screen)\nmv oldname newname (rename/move file)\nrmdir dirname (remove empty dir)\nfree (RAM/file table usage)\ndf (filesystem usage)\nver (version info)\nuptime (system uptime)\nhalt (shutdown)\nreboot (restart)\nhexdump file.txt (hex view of file)\nhistory (recent commands)", 0xD); // help/about
     } else if (is_math_expr(cmd)) {
         handle_calc_command(cmd, video, cursor);
+    } else if (mini_strcmp(cmd, "lsall") == 0) {
+        handle_lsall_command(video, cursor);
     } else if (cmd[0] == 'm' && cmd[1] == 'k' && cmd[2] == 'd' && cmd[3] == 'i' && cmd[4] == 'r' && cmd[5] == ' ') {
         int start = 6;
         while (cmd[start] == ' ') start++;
