@@ -88,9 +88,245 @@ static RamDir dir_table[MAX_DIRS] = { {"root", 1, -1} };
 static int dir_count = 1;
 static int current_dir = 0;
 
+
 //forward delcarations
 static void print_string(const char* str, int len, char* video, int* cursor, unsigned char color);
 static void print_string_sameline(const char* str, int len, char* video, int* cursor, unsigned char color);
+
+
+
+// Forward declarations for editor dependencies
+static int find_file(const char* name);
+static void handle_clear_command(char* video, int* cursor);
+
+typedef struct {
+    char name[MAX_FILE_NAME];
+    char data[MAX_FILE_SIZE];
+    int size;
+    int dir; // 
+} RamFile;
+static RamFile file_table[MAX_FILES];
+static int file_count = 0;
+
+// --- Nano-like Text Editor ---
+static void nano_editor(const char* filename, char* video, int* cursor) {
+    int idx = find_file(filename);
+    if (idx == -1) {
+        print_string("File not found", 14, video, cursor, 0xC);
+        return;
+    }
+    char* buf = file_table[idx].data;
+    int buflen = file_table[idx].size;
+    int pos = buflen;
+    int editing = 1;
+    int maxlen = MAX_FILE_SIZE - 1;
+    // Fully clear the screen before entering the editor
+    for (int i = 0; i < 80 * 25 * 2; i += 2) {
+        video[i] = ' ';
+        video[i + 1] = 0x07;
+    }
+    // Draw header at the top (rows 0, 1, and 2)
+    int header_cursor = 0;
+    print_string("--- Nano Editor ---", -1, video, &header_cursor, 0x0B);
+    print_string("Ctrl+S: Save and Exit | Ctrl+Q: Quit without Saving", -1, video, &header_cursor, 0x0F);
+    // Always start drawing file text at row 3, col 0 (edit area)
+    int edit_start = 240; // row 3, col 0
+    int draw_cursor = edit_start;
+    int last_char_pos = draw_cursor;
+    for (int i = 0; i < buflen && draw_cursor < 80*25; i++) {
+        if (buf[i] == '\n') {
+            draw_cursor = ((draw_cursor / 80) + 1) * 80;
+        } else {
+            video[(draw_cursor)*2] = buf[i];
+            video[(draw_cursor)*2+1] = 0x0F;
+            last_char_pos = draw_cursor;
+            draw_cursor++;
+        }
+    }
+    // Set cursor: always after last character (never on a new line unless last char is newline)
+    if (buflen > 0) {
+        if (buf[buflen-1] == '\n') {
+            *cursor = last_char_pos + 1; // after the newline
+        } else {
+            *cursor = last_char_pos + 1;
+        }
+    } else {
+        *cursor = edit_start;
+    }
+    // Immediately update hardware cursor to match logical cursor
+    unsigned short pos_hw = *cursor;
+    asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0F), "Nd"((unsigned short)0x3D4));
+    asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos_hw & 0xFF)), "Nd"((unsigned short)0x3D5));
+    asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
+    asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos_hw >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
+    // Use the same keyboard logic as the shell
+    int shift = 0, ctrl = 0;
+    unsigned char prev_scancode = 0;
+    while (editing) {
+        unsigned char scancode;
+        asm volatile("inb $0x60, %0" : "=a"(scancode));
+        if (scancode == prev_scancode || scancode == 0) continue; // debounce: only process new key
+        prev_scancode = scancode;
+        // Key release events (ignore)
+        if (scancode & 0x80) {
+            // Shift/Ctrl release
+            if (scancode == 0xAA || scancode == 0xB6) shift = 0;
+            if (scancode == 0x9D) ctrl = 0;
+            continue;
+        }
+        // Shift/Ctrl press
+        if (scancode == 0x2A || scancode == 0x36) { shift = 1; continue; }
+        if (scancode == 0x1D) { ctrl = 1; continue; }
+        // Ctrl+S (save)
+        if (ctrl && scancode == 0x1F) { // S
+            file_table[idx].size = pos;
+            buf[pos] = 0;
+            // Clear the rest of the buffer after pos
+            for (int i = pos + 1; i < MAX_FILE_SIZE; i++) {
+                buf[i] = 0;
+            }
+            print_string("[Saved]", -1, video, cursor, 0x0A);
+            // Move hardware cursor
+            unsigned short pos_hw = *cursor;
+            asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0F), "Nd"((unsigned short)0x3D4));
+            asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos_hw & 0xFF)), "Nd"((unsigned short)0x3D5));
+            asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
+            asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos_hw >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
+            // Exit after saving
+            break;
+        }
+        // Ctrl+Q (quit)
+        if (ctrl && scancode == 0x10) { // Q
+            print_string("[Quit without saving]", -1, video, cursor, 0x0C);
+            // Move hardware cursor
+            unsigned short pos_hw = *cursor;
+            asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0F), "Nd"((unsigned short)0x3D4));
+            asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos_hw & 0xFF)), "Nd"((unsigned short)0x3D5));
+            asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
+            asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos_hw >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
+            // Exit without saving
+            break;
+        }
+        // Enter
+        if (scancode == 0x1C && pos < maxlen) {
+            // Insert newline at cursor position, shift buffer right
+            int ins_idx = *cursor - edit_start;
+            if (ins_idx < 0) ins_idx = 0;
+            for (int i = pos; i > ins_idx; i--) {
+                buf[i] = buf[i-1];
+            }
+            buf[ins_idx] = '\n';
+            pos++;
+            // Move cursor to start of next line (col 0 of next row)
+            int cur_row = (*cursor) / 80;
+            *cursor = (cur_row + 1) * 80;
+            last_char_pos = *cursor - 1;
+            if (*cursor < edit_start) *cursor = edit_start;
+            // Move hardware cursor
+            unsigned short pos_hw = *cursor;
+            asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0F), "Nd"((unsigned short)0x3D4));
+            asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos_hw & 0xFF)), "Nd"((unsigned short)0x3D5));
+            asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
+            asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos_hw >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
+            continue;
+        }
+        // Backspace
+        if (scancode == 0x0E && pos > 0) {
+            // Allow backspace at start of line: move to end of previous line, but do NOT delete
+            int cur_row = (*cursor) / 80;
+            int cur_col = (*cursor) % 80;
+            if (cur_col == 0 && cur_row > 3) {
+                // Move to end of previous line
+                *cursor = (*cursor) - 80;
+                // Find the last character on the previous line
+                int prev_line_end = *cursor + 79;
+                while (prev_line_end >= *cursor && video[prev_line_end*2] == ' ') prev_line_end--;
+                *cursor = prev_line_end + 1;
+                // Move hardware cursor
+                unsigned short pos_hw = *cursor;
+                asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0F), "Nd"((unsigned short)0x3D4));
+                asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos_hw & 0xFF)), "Nd"((unsigned short)0x3D5));
+                asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
+                asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos_hw >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
+                continue;
+            }
+            if (*cursor >= edit_start && pos > 0) {
+                // Calculate buffer index to delete (character before cursor)
+                int del_idx = *cursor - edit_start - 1;
+                if (del_idx < 0) del_idx = 0;
+                // Shift buffer left from del_idx
+                for (int i = del_idx; i < pos - 1; i++) {
+                    buf[i] = buf[i + 1];
+                }
+                pos--;
+                buf[pos] = 0;
+                *cursor = edit_start + del_idx;
+                if (*cursor < edit_start) *cursor = edit_start;
+                video[(*cursor)*2] = ' ';
+                last_char_pos = *cursor - 1;
+                // Move hardware cursor
+                unsigned short pos_hw = *cursor;
+                asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0F), "Nd"((unsigned short)0x3D4));
+                asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos_hw & 0xFF)), "Nd"((unsigned short)0x3D5));
+                asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
+                asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos_hw >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
+            }
+            continue;
+        }
+        // Printable characters
+        const char lower_table[128] = {
+            [0x02] = '1', [0x03] = '2', [0x04] = '3', [0x05] = '4', [0x06] = '5', [0x07] = '6',
+            [0x08] = '7', [0x09] = '8', [0x0A] = '9', [0x0B] = '0',
+            [0x0C] = '-', [0x0D] = '=',
+            [0x10] = 'q', [0x11] = 'w', [0x12] = 'e', [0x13] = 'r', [0x14] = 't', [0x15] = 'y',
+            [0x16] = 'u', [0x17] = 'i', [0x18] = 'o', [0x19] = 'p',
+            [0x1A] = '[', [0x1B] = ']', [0x1E] = 'a', [0x1F] = 's', [0x20] = 'd', [0x21] = 'f', [0x22] = 'g', [0x23] = 'h',
+            [0x24] = 'j', [0x25] = 'k', [0x26] = 'l', [0x27] = ';', [0x28] = '\'', [0x29] = '`',
+            [0x2B] = '\\', [0x2C] = 'z', [0x2D] = 'x', [0x2E] = 'c', [0x2F] = 'v', [0x30] = 'b', [0x31] = 'n', [0x32] = 'm',
+            [0x33] = ',', [0x34] = '.', [0x35] = '/', [0x39] = ' ',
+        };
+        const char upper_table[128] = {
+            [0x02] = '!', [0x03] = '@', [0x04] = '#', [0x05] = '$', [0x06] = '%', [0x07] = '^',
+            [0x08] = '&', [0x09] = '*', [0x0A] = '(', [0x0B] = ')',
+            [0x0C] = '_', [0x0D] = '+',
+            [0x10] = 'Q', [0x11] = 'W', [0x12] = 'E', [0x13] = 'R', [0x14] = 'T', [0x15] = 'Y',
+            [0x16] = 'U', [0x17] = 'I', [0x18] = 'O', [0x19] = 'P',
+            [0x1A] = '{', [0x1B] = '}', [0x1E] = 'A', [0x1F] = 'S', [0x20] = 'D', [0x21] = 'F', [0x22] = 'G', [0x23] = 'H',
+            [0x24] = 'J', [0x25] = 'K', [0x26] = 'L', [0x27] = ':', [0x28] = '"', [0x29] = '~',
+            [0x2B] = '|', [0x2C] = 'Z', [0x2D] = 'X', [0x2E] = 'C', [0x2F] = 'V', [0x30] = 'B', [0x31] = 'N', [0x32] = 'M',
+            [0x33] = '<', [0x34] = '>', [0x35] = '?', [0x39] = ' ',
+        };
+        if (scancode < 128) {
+            char c = shift ? upper_table[scancode] : lower_table[scancode];
+            if (c && pos < maxlen) {
+                // Insert at cursor position, shift buffer right
+                int ins_idx = *cursor - edit_start;
+                if (ins_idx < 0) ins_idx = 0;
+                for (int i = pos; i > ins_idx; i--) {
+                    buf[i] = buf[i-1];
+                }
+                buf[ins_idx] = c;
+                // Only increment pos if we inserted at the end
+                if (ins_idx >= pos) {
+                    pos++;
+                } else if (pos < maxlen) {
+                    pos++;
+                }
+                video[(*cursor)*2] = c;
+                video[(*cursor)*2+1] = 0x0F;
+                (*cursor)++;
+                last_char_pos = *cursor - 1;
+                if (*cursor < edit_start) *cursor = edit_start;
+                // Move hardware cursor
+                unsigned short pos_hw = *cursor;
+                asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0F), "Nd"((unsigned short)0x3D4));
+                asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos_hw & 0xFF)), "Nd"((unsigned short)0x3D5));
+                asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
+                asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos_hw >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
+            }
+        }
+    }
+}
 
 //CALCULATOR PARSER
 
@@ -203,15 +439,7 @@ static void handle_calc_command(const char* expr, char* video, int* cursor) {
     print_string(buf, n, video, cursor, 0x0A); // green
 }
 
-typedef struct {
-    char name[MAX_FILE_NAME];
-    char data[MAX_FILE_SIZE];
-    int size;
-    int dir; // 
-} RamFile;
 
-static RamFile file_table[MAX_FILES];
-static int file_count = 0;
 
 // History tracking
 static char history[10][64]; // Store up to 10 commands, each up to 64 characters
@@ -445,6 +673,8 @@ static void handle_mv_command(const char* oldname, const char* newname, char* vi
     print_string("File renamed", 12, video, cursor, 0xA);
 }
 
+
+
 //for basic call and reply commands
 static void handle_command(const char* cmd, char* video, int* cursor, const char* input, const char* output, unsigned char color) {
     if (mini_strcmp(cmd, input) == 0) {
@@ -641,67 +871,26 @@ static void handle_history_command(char* video, int* cursor) {
     }
 }
 
-// --- NEW HELPER: draw_prompt (used after history) ---
-static void draw_prompt(char* video,
-                        int* cursor,
-                        int* line_start,
-                        char* cmd_buf,
-                        int* cmd_len,
-                        int* cmd_cursor) {
-    // move to next line
-    *cursor = ((*cursor / 80) + 1) * 80;
-    if (*cursor >= 80 * 25) {
-        scroll_screen(video);
-        *cursor -= 80;
-    }
-    const char* prompt = "> ";
-    int pi = 0;
-    while (prompt[pi] && *cursor < 80 * 25 - 1) {
-        video[*cursor * 2]     = prompt[pi];
-        video[*cursor * 2 + 1] = 0x0F;
-        (*cursor)++;
-        pi++;
-    }
-    *line_start = *cursor;
-    *cmd_len = 0;
-    *cmd_cursor = 0;
-}
-
 // Dispatch command
-static void dispatch_command(const char* cmd,
-                             char* video,
-                             int* cursor,
-                             int* line_start,
-                             char* cmd_buf,
-                             int* cmd_len,
-                             int* cmd_cursor) {
+static void dispatch_command(const char* cmd, char* video, int* cursor) {
+        // nano-like editor: edit filename.txt
+        if (cmd[0] == 'e' && cmd[1] == 'd' && cmd[2] == 'i' && cmd[3] == 't' && cmd[4] == ' ') {
+            int start = 5;
+            while (cmd[start] == ' ') start++;
+            char filename[MAX_FILE_NAME];
+            int fn = 0;
+            while (cmd[start] && fn < MAX_FILE_NAME-1) filename[fn++] = cmd[start++];
+            filename[fn] = 0;
+            nano_editor(filename, video, cursor);
+            return;
+        }
     add_to_history(cmd); // Add the command to history
     if (mini_strcmp(cmd, "ping") == 0) {
         handle_command(cmd, video, cursor, "ping", "pong", 0xA); // confirmation
     } else if (mini_strcmp(cmd, "about") == 0) {
         handle_command(cmd, video, cursor, "about", "Smiggles v1.0.0\nJules Miller and Vajra Vanukuri", 0xD); // help/about
     } else if (mini_strcmp(cmd, "help") == 0) {
-        handle_command(cmd, video, cursor, "help",
-            "Available commands:\n"
-            "print \"text\" (prints text)\n"
-            "echo \"text\" > file.txt (creates file)\n"
-            "ls (view all files)\n"
-            "cat file.txt (read contents of file)\n"
-            "rm file.txt (delete file)\n"
-            "mkdir dirname (make dir)\n"
-            "cd dirname (change dir)\n"
-            "time (displays time in UTC)\n"
-            "clear/cls (clear screen)\n"
-            "mv oldname newname (rename/move file)\n"
-            "rmdir dirname (remove empty dir)\n"
-            "free (RAM/file table usage)\n"
-            "df (filesystem usage)\n"
-            "ver (version info)\n"
-            "uptime (system uptime)\n"
-            "halt (shutdown)\n"
-            "reboot (restart)\n"
-            "hexdump file.txt (hex view of file)\n"
-            "history (recent commands)", 0xD); // help/about
+        handle_command(cmd, video, cursor, "help", "Available commands:\nprint \"text\" (prints text)\necho \"text\" > file.txt (creates file)\nls (view all files)\ncat file.txt (read contents of file)\nrm file.txt (delete file)\nmkdir dirname (make dir)\ncd dirname (change dir)\nedit file.txt (nano editor)\ntime (displays time in UTC)\nclear/cls (clear screen)\nmv oldname newname (rename/move file)\nrmdir dirname (remove empty dir)\nfree (RAM/file table usage)\ndf (filesystem usage)\nver (version info)\nuptime (system uptime)\nhalt (shutdown)\nreboot (restart)\nhexdump file.txt (hex view of file)\nhistory (recent commands)", 0xD); // help/about
     } else if (is_math_expr(cmd)) {
         handle_calc_command(cmd, video, cursor);
     } else if (mini_strcmp(cmd, "lsall") == 0) {
@@ -758,13 +947,13 @@ static void dispatch_command(const char* cmd,
         //format: echo "text" > filename
         int quote_start = 5;
         while (cmd[quote_start] == ' ') quote_start++;
-        if (cmd[quote_start] != '\"') {
+        if (cmd[quote_start] != '"') {
             print_string("Bad echo syntax", 16, video, cursor, 0x0C);
             return;
         }
         int quote_end = quote_start + 1;
-        while (cmd[quote_end] && cmd[quote_end] != '\"') quote_end++;
-        if (cmd[quote_end] != '\"') {
+        while (cmd[quote_end] && cmd[quote_end] != '"') quote_end++;
+        if (cmd[quote_end] != '"') {
             print_string("Bad echo syntax", 16, video, cursor, 0x0C);
             return;
         }
@@ -905,6 +1094,7 @@ void kernel_main(void) {
     int line_start = 0;
     unsigned char prev_scancode = 0;
     int shift = 0;
+
     
     for (int i = 0; i < 80*25*2; i += 2) {
         video[i] = ' ';
@@ -949,12 +1139,14 @@ void kernel_main(void) {
     }
     prompt_end = cursor;
     line_start = cursor;
+
     
     unsigned short pos = cursor;
     asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0F), "Nd"((uint16_t)0x3D4));
     asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos & 0xFF)), "Nd"((uint16_t)0x3D5));
     asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((uint16_t)0x3D4));
     asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos >> 8) & 0xFF)), "Nd"((uint16_t)0x3D5));
+
     
     char cmd_buf[64];
     int cmd_len = 0;
@@ -1002,6 +1194,7 @@ void kernel_main(void) {
                 }
                 else if (scancode != prev_scancode && scancode != 0) {
                     prev_scancode = scancode;
+
                     // Handle left/right arrow keys (E0 4B and E0 4D)
                     if (e0_prefix) {
                         if (scancode == 0x4B) { // Left arrow
@@ -1058,7 +1251,7 @@ void kernel_main(void) {
                         [0x10] = 'Q', [0x11] = 'W', [0x12] = 'E', [0x13] = 'R', [0x14] = 'T', [0x15] = 'Y',
                         [0x16] = 'U', [0x17] = 'I', [0x18] = 'O', [0x19] = 'P',
                         [0x1A] = '{', [0x1B] = '}', [0x1E] = 'A', [0x1F] = 'S', [0x20] = 'D', [0x21] = 'F', [0x22] = 'G', [0x23] = 'H',
-                        [0x24] = 'J', [0x25] = 'K', [0x26] = 'L', [0x27] = ':', [0x28] = '\"', [0x29] = '~',
+                        [0x24] = 'J', [0x25] = 'K', [0x26] = 'L', [0x27] = ':', [0x28] = '"', [0x29] = '~',
                         [0x2B] = '|', [0x2C] = 'Z', [0x2D] = 'X', [0x2E] = 'C', [0x2F] = 'V', [0x30] = 'B', [0x31] = 'N', [0x32] = 'M',
                         [0x33] = '<', [0x34] = '>', [0x35] = '?', [0x39] = ' ', [0x1C] = '\n', [0x0E] = 8, // backspace
                         [0x0F] = '\t',
@@ -1076,20 +1269,18 @@ void kernel_main(void) {
                         if (c == '\n') {
                             cmd_buf[cmd_len] = 0;
                             // Print command: print "text"
-                            if (cmd_buf[0] == 'p' && cmd_buf[1] == 'r' && cmd_buf[2] == 'i' && cmd_buf[3] == 'n' && cmd_buf[4] == 't' && cmd_buf[5] == ' ' && cmd_buf[6] == '\"') {
+                            if (cmd_buf[0] == 'p' && cmd_buf[1] == 'r' && cmd_buf[2] == 'i' && cmd_buf[3] == 'n' && cmd_buf[4] == 't' && cmd_buf[5] == ' ' && cmd_buf[6] == '"') {
                                 // Find closing quote
                                 int start = 7;
                                 int end = start;
-                                while (cmd_buf[end] && cmd_buf[end] != '\"') end++;
-                                if (cmd_buf[end] == '\"') {
+                                while (cmd_buf[end] && cmd_buf[end] != '"') end++;
+                                if (cmd_buf[end] == '"') {
                                     // Print the string between quotes
                                     // Move cursor to new line before printing
                                     print_string(&cmd_buf[start], end - start, video, &cursor, 0x0D);
                                 }
                             } else {
-                                // NOTE: now we pass line_start/cmd_buf/cmd_len/cmd_cursor
-                                dispatch_command(cmd_buf, video, &cursor,
-                                                 &line_start, cmd_buf, &cmd_len, &cmd_cursor);
+                                dispatch_command(cmd_buf, video, &cursor);
                             }
                             // New prompt
                             cursor = ((cursor / 80) + 1) * 80;
@@ -1173,11 +1364,11 @@ void kernel_main(void) {
                                 }
                             }
                         }
-                        unsigned short pos2 = cursor;
+                        unsigned short pos = cursor;
                         asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0F), "Nd"((unsigned short)0x3D4));
-                        asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos2 & 0xFF)), "Nd"((unsigned short)0x3D5));
+                        asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos & 0xFF)), "Nd"((unsigned short)0x3D5));
                         asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
-                        asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos2 >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
+                        asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
                     }
                 }
             }
