@@ -45,6 +45,7 @@ void pic_remap() {
 
 volatile int ticks = 0;
 char last_key = 0;
+int just_saved = 0;
 
 // C handlers called from ASM stubs
 void timer_handler() {
@@ -88,6 +89,27 @@ static RamDir dir_table[MAX_DIRS] = { {"root", 1, -1} };
 static int dir_count = 1;
 static int current_dir = 0;
 
+
+static void print_smiggles_art(char* video, int* cursor) {
+    const char* smiggles_art[7] = {
+        " _______  __   __  ___   _______  _______  ___      _______  _______ ",
+        "|       ||  |_|  ||   | |       ||       ||   |    |       ||       |",
+        "|  _____||       ||   | |    ___||    ___||   |    |    ___||  _____|",
+        "| |_____ |       ||   | |   | __ |   | __ |   |    |   |___ | |_____ ",
+        "|_____  ||       ||   | |   ||  ||   ||  ||   |___ |    ___||_____  |",
+        " _____| || ||_|| ||   | |   |_| ||   |_| ||       ||   |___  _____| |",
+        "|_______||_|   |_||___| |_______||_______||_______||_______||_______|"
+    };
+    unsigned char rainbow[7] = {0x0E, 0x0E, 0x0E, 0x0E, 0x0E, 0x0E, 0x0E};
+    int art_lines = 7;
+    for (int l = 0; l < art_lines; l++) {
+        for (int j = 0; smiggles_art[l][j] && j < 80; j++) {
+            video[(l*80+j)*2] = smiggles_art[l][j];
+            video[(l*80+j)*2+1] = rainbow[j % 7];
+        }
+    }
+    *cursor = art_lines * 80;
+}
 
 //forward delcarations
 static void print_string(const char* str, int len, char* video, int* cursor, unsigned char color);
@@ -175,7 +197,13 @@ static void nano_editor(const char* filename, char* video, int* cursor) {
         if (ctrl && scancode == 0x1F) { // Ctrl+S
             file_table[idx].size = pos;
             buf[pos] = 0;
-            print_string("[Saved]", -1, video, cursor, 0x0A);
+            just_saved = 1;
+            // Wait for ctrl release
+            while (1) {
+                unsigned char sc;
+                asm volatile("inb $0x60, %0" : "=a"(sc));
+                if (sc == 0x9D) break; // ctrl release
+            }
             break;
         }
         if (ctrl && scancode == 0x10) { // Ctrl+Q
@@ -243,6 +271,12 @@ static void nano_editor(const char* filename, char* video, int* cursor) {
         asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
         asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos_hw >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
     }
+    // Clear screen
+    for (int i = 0; i < 80*25*2; i += 2) {
+        video[i] = ' ';
+        video[i+1] = 0x07;
+    }
+    *cursor = 0;
 }
 
 //CALCULATOR PARSER
@@ -1019,33 +1053,8 @@ void kernel_main(void) {
     }
 
     //introductory message
-    const char* smiggles_art[7] = {
-        " _______  __   __  ___   _______  _______  ___      _______  _______ ",
-        "|       ||  |_|  ||   | |       ||       ||   |    |       ||       |",
-        "|  _____||       ||   | |    ___||    ___||   |    |    ___||  _____|",
-        "| |_____ |       ||   | |   | __ |   | __ |   |    |   |___ | |_____ ",
-        "|_____  ||       ||   | |   ||  ||   ||  ||   |___ |    ___||_____  |",
-        " _____| || ||_|| ||   | |   |_| ||   |_| ||       ||   |___  _____| |",
-        "|_______||_|   |_||___| |_______||_______||_______||_______||_______|"
-    };
-    //yellow
-    unsigned char rainbow[7] = {0x0E, 0x0E, 0x0E, 0x0E, 0x0E, 0x0E, 0x0E};
-    int art_lines = 7;
-    for (int l = 0; l < art_lines; l++) {
-        
-        for (int j = 0; j < 80; j++) {
-            video[(l*80+j)*2] = ' ';
-            video[(l*80+j)*2+1] = rainbow[l % 7];
-        }
-        
-        for (int j = 0; smiggles_art[l][j] && j < 80; j++) {
-            video[(l*80+j)*2] = smiggles_art[l][j];
-            video[(l*80+j)*2+1] = rainbow[j % 7];
-        }
-    }
-
-    
-    cursor = art_lines * 80;
+    print_smiggles_art(video, &cursor);
+    cursor += 80; // add one line space
     const char* msg = "> ";
     int i = 0;
     while (msg[i]) {
@@ -1068,6 +1077,12 @@ void kernel_main(void) {
     char cmd_buf[64];
     int cmd_len = 0;
     int cmd_cursor = 0; // position within the input line
+
+    // Enable cursor
+    asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0A), "Nd"((unsigned short)0x3D4));
+    asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0), "Nd"((unsigned short)0x3D5));
+    asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0B), "Nd"((unsigned short)0x3D4));
+    asm volatile ("outb %0, %1" : : "a"((unsigned char)15), "Nd"((unsigned short)0x3D5));
 
     while (1) {
         unsigned char scancode;
@@ -1199,6 +1214,17 @@ void kernel_main(void) {
                             } else {
                                 dispatch_command(cmd_buf, video, &cursor);
                             }
+                            if (just_saved) {
+                                just_saved = 0;
+                                print_smiggles_art(video, &cursor);
+                                cursor += 80; // add one line space
+                                cursor = ((cursor / 80) + 1) * 80;
+                                if (cursor >= 80*25) {
+                                    scroll_screen(video);
+                                    cursor -= 80;
+                                }
+                                print_string("Saved", 5, video, &cursor, 0x0A);
+                            }
                             // New prompt
                             cursor = ((cursor / 80) + 1) * 80;
                             if (cursor >= 80*25) {
@@ -1213,6 +1239,12 @@ void kernel_main(void) {
                                 cursor++;
                                 pi++;
                             }
+                            // Update hardware cursor
+                            unsigned short pos_hw = cursor;
+                            asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0F), "Nd"((unsigned short)0x3D4));
+                            asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos_hw & 0xFF)), "Nd"((unsigned short)0x3D5));
+                            asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
+                            asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos_hw >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
                             line_start = cursor;
                             cmd_len = 0;
                             cmd_cursor = 0;
