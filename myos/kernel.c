@@ -182,6 +182,7 @@ static void nano_editor(const char* filename, char* video, int* cursor) {
     asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos_hw >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
     int shift = 0, ctrl = 0;
     unsigned char prev_scancode = 0;
+    int exit_code = 0; // 0 = none, 1 = saved, 2 = exited
     while (editing) {
         unsigned char scancode;
         asm volatile("inb $0x60, %0" : "=a"(scancode));
@@ -204,10 +205,20 @@ static void nano_editor(const char* filename, char* video, int* cursor) {
                 asm volatile("inb $0x60, %0" : "=a"(sc));
                 if (sc == 0x9D) break; // ctrl release
             }
+            exit_code = 1;
             break;
         }
         if (ctrl && scancode == 0x10) { // Ctrl+Q
-            print_string("[Quit]", -1, video, cursor, 0x0C);
+            file_table[idx].size = pos;
+            buf[pos] = 0;
+            just_saved = 1;
+            // Wait for ctrl release
+            while (1) {
+                unsigned char sc;
+                asm volatile("inb $0x60, %0" : "=a"(sc));
+                if (sc == 0x9D) break; // ctrl release
+            }
+            exit_code = 2;
             break;
         }
         if (scancode == 0x1C && pos < maxlen) { // Enter
@@ -264,7 +275,20 @@ static void nano_editor(const char* filename, char* video, int* cursor) {
             video[(redraw_cursor)*2] = ' ';
             video[(redraw_cursor)*2+1] = 0x07;
         }
-        *cursor = draw_cursor;
+        // Calculate logical cursor position after redraw
+        int cur_row = 0, cur_col = 0, temp = 0;
+        for (int i = 0; i < pos; i++) {
+            if (buf[i] == '\n') {
+                cur_row++;
+                cur_col = 0;
+                temp = 0;
+            } else {
+                cur_col++;
+                temp++;
+            }
+        }
+        int cur_pos = edit_start + cur_row * 80 + cur_col;
+        *cursor = cur_pos;
         unsigned short pos_hw = *cursor;
         asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0F), "Nd"((unsigned short)0x3D4));
         asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos_hw & 0xFF)), "Nd"((unsigned short)0x3D5));
@@ -277,6 +301,7 @@ static void nano_editor(const char* filename, char* video, int* cursor) {
         video[i+1] = 0x07;
     }
     *cursor = 0;
+    just_saved = exit_code;
 }
 
 //CALCULATOR PARSER
@@ -1215,6 +1240,8 @@ void kernel_main(void) {
                                 dispatch_command(cmd_buf, video, &cursor);
                             }
                             if (just_saved) {
+                                int msg_color = (just_saved == 1) ? 0x0A : 0x0C;
+                                const char* msg = (just_saved == 1) ? "[Saved]" : "[Exited]";
                                 just_saved = 0;
                                 print_smiggles_art(video, &cursor);
                                 cursor += 80; // add one line space
@@ -1223,7 +1250,7 @@ void kernel_main(void) {
                                     scroll_screen(video);
                                     cursor -= 80;
                                 }
-                                print_string("Saved", 5, video, &cursor, 0x0A);
+                                print_string(msg, -1, video, &cursor, msg_color);
                             }
                             // New prompt
                             cursor = ((cursor / 80) + 1) * 80;
