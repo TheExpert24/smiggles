@@ -905,7 +905,7 @@ static void dispatch_command(const char* cmd, char* video, int* cursor) {
     if (mini_strcmp(cmd, "ping") == 0) {
         handle_command(cmd, video, cursor, "ping", "pong", 0xA); // confirmation
     } else if (mini_strcmp(cmd, "about") == 0) {
-        handle_command(cmd, video, cursor, "about", "Smiggles v1.0.0\nJules Miller and Vajra Vanukuri", 0xD); // help/about
+        handle_command(cmd, video, cursor, "about", "Smiggles v1.0.0 is an operating system that is lightweight, easy to use, and\ndesigned for the normal user and the skilled web developer.", 0xD); // help/about
     } else if (mini_strcmp(cmd, "help") == 0) {
         handle_command(cmd, video, cursor, "help", "Available commands:\nprint \"text\" (prints text)\necho \"text\" > file.txt (creates file)\nls (view all files)\ncat file.txt (read contents of file)\nrm file.txt (delete file)\nmkdir dirname (make dir)\ncd dirname (change dir)\nedit file.txt (nano editor)\ntime (displays time in UTC)\nclear/cls (clear screen)\nmv oldname newname (rename/move file)\nrmdir dirname (remove empty dir)\nfree (RAM/file table usage)\ndf (filesystem usage)\nver (version info)\nuptime (system uptime)\nhalt (shutdown)\nreboot (restart)\nhexdump file.txt (hex view of file)\nhistory (recent commands)", 0xD); // help/about
     } else if (is_math_expr(cmd)) {
