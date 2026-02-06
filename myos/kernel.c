@@ -5,6 +5,10 @@ int line_start = 0;
 int cmd_len = 0;
 int cmd_cursor = 0;
 int history_position = -1;  // -1 means not navigating history
+int tab_completion_active = 0;
+int tab_completion_position = -1;
+int tab_match_count = 0;
+char tab_matches[32][32];
 
 void kernel_main(void) {
     // Initialize filesystem FIRST
@@ -109,7 +113,35 @@ void kernel_main(void) {
 
         if (e0_prefix) {
             if (scancode == 0x4B) { // Left arrow
-                if (cmd_cursor > 0) {
+                if (tab_completion_active && tab_completion_position > 0) {
+                    // Navigate tab completion backwards
+                    tab_completion_position--;
+                    
+                    // Clear current line
+                    for (int i = 0; i < 63; i++) {
+                        video[(line_start + i)*2] = ' ';
+                        video[(line_start + i)*2+1] = 0x07;
+                    }
+                    
+                    // Write selected completion
+                    cmd_len = 0;
+                    int j = 0;
+                    while (tab_matches[tab_completion_position][j] && cmd_len < 63) {
+                        cmd_buf[cmd_len] = tab_matches[tab_completion_position][j];
+                        video[(line_start + cmd_len)*2] = tab_matches[tab_completion_position][j];
+                        video[(line_start + cmd_len)*2+1] = 0x0F;
+                        cmd_len++;
+                        j++;
+                    }
+                    cmd_cursor = cmd_len;
+                    cursor = line_start + cmd_len;
+                    
+                    unsigned short pos = cursor;
+                    asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0F), "Nd"((unsigned short)0x3D4));
+                    asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos & 0xFF)), "Nd"((unsigned short)0x3D5));
+                    asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
+                    asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
+                } else if (cmd_cursor > 0) {
                     cmd_cursor--;
                     cursor--;
                     unsigned short pos = cursor;
@@ -126,7 +158,35 @@ void kernel_main(void) {
                 }
                 continue;
             } else if (scancode == 0x4D) { // Right arrow
-                if (cmd_cursor < cmd_len) {
+                if (tab_completion_active && tab_completion_position < tab_match_count - 1) {
+                    // Navigate tab completion forwards
+                    tab_completion_position++;
+                    
+                    // Clear current line
+                    for (int i = 0; i < 63; i++) {
+                        video[(line_start + i)*2] = ' ';
+                        video[(line_start + i)*2+1] = 0x07;
+                    }
+                    
+                    // Write selected completion
+                    cmd_len = 0;
+                    int j = 0;
+                    while (tab_matches[tab_completion_position][j] && cmd_len < 63) {
+                        cmd_buf[cmd_len] = tab_matches[tab_completion_position][j];
+                        video[(line_start + cmd_len)*2] = tab_matches[tab_completion_position][j];
+                        video[(line_start + cmd_len)*2+1] = 0x0F;
+                        cmd_len++;
+                        j++;
+                    }
+                    cmd_cursor = cmd_len;
+                    cursor = line_start + cmd_len;
+                    
+                    unsigned short pos = cursor;
+                    asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0F), "Nd"((unsigned short)0x3D4));
+                    asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos & 0xFF)), "Nd"((unsigned short)0x3D5));
+                    asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
+                    asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
+                } else if (cmd_cursor < cmd_len) {
                     cmd_cursor++;
                     cursor++;
                     unsigned short pos = cursor;
@@ -261,7 +321,15 @@ void kernel_main(void) {
             c = lower_table[scancode];
 
         if (c) {
+            // Any key press deactivates tab completion mode
+            if (c != '\t' && c != '\n') {
+                tab_completion_active = 0;
+                tab_completion_position = -1;
+            }
+            
             if (c == '\n') {
+                tab_completion_active = 0;
+                tab_completion_position = -1;
                 cmd_buf[cmd_len] = 0;
                 if (cmd_buf[0] == 'p' && cmd_buf[1] == 'r' && cmd_buf[2] == 'i' && cmd_buf[3] == 'n' && cmd_buf[4] == 't' && cmd_buf[5] == ' ' && cmd_buf[6] == '"') {
                     int start = 7;
@@ -319,10 +387,12 @@ void kernel_main(void) {
                 }
             }
             else if (c == '\t' && cursor < 80*25 - 4) {
-                for (int t = 0; t < 4; t++) {
-                    video[cursor*2] = ' ';
-                    video[cursor*2+1] = 0x0F;
-                    cursor++;
+                // Tab completion
+                int old_cursor = cursor;
+                handle_tab_completion(cmd_buf, &cmd_len, &cmd_cursor, video, &cursor, line_start);
+                // If cursor moved to a new line (multiple matches shown), update line_start
+                if (cursor / 80 > old_cursor / 80) {
+                    line_start = (cursor / 80) * 80 + 2;  // Account for "> " prompt
                 }
             }
             else {

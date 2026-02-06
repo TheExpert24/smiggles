@@ -648,3 +648,157 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
         }
     }
 }
+
+void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* video, int* cursor, int line_start) {
+    // Only complete at end of command for now
+    if (*cmd_cursor != *cmd_len) return;
+    
+    // Null terminate current buffer
+    cmd_buf[*cmd_len] = 0;
+    
+    // List of common commands
+    const char* commands[] = {
+        "ls", "cd", "pwd", "cat", "mkdir", "rmdir", "rm", "touch", "cp", "mv",
+        "echo", "edit", "tree", "grep", "clear", "cls", "help", "time", "ping",
+        "about", "ver", "halt", "reboot", "history", "df", "free", "uptime"
+    };
+    int cmd_count = 27;
+    
+    // Find what we're trying to complete
+    int word_start = *cmd_len - 1;
+    while (word_start > 0 && cmd_buf[word_start - 1] != ' ') word_start--;
+    
+    char partial[64];
+    int partial_len = *cmd_len - word_start;
+    for (int i = 0; i < partial_len; i++) {
+        partial[i] = cmd_buf[word_start + i];
+    }
+    partial[partial_len] = 0;
+    
+    // Collect matches into global array
+    tab_match_count = 0;
+    
+    // If at start of line, match commands
+    if (word_start == 0) {
+        for (int i = 0; i < cmd_count && tab_match_count < 32; i++) {
+            int match = 1;
+            for (int j = 0; j < partial_len; j++) {
+                if (commands[i][j] != partial[j]) {
+                    match = 0;
+                    break;
+                }
+            }
+            if (match && commands[i][partial_len] != 0) {
+                str_copy(tab_matches[tab_match_count], commands[i], MAX_NAME_LENGTH);
+                tab_match_count++;
+            }
+        }
+    }
+    
+    // Also match files/directories in current directory
+    FSNode* dir = &node_table[current_dir_idx];
+    for (int i = 0; i < dir->child_count && tab_match_count < 32; i++) {
+        int child_idx = dir->children_idx[i];
+        FSNode* child = &node_table[child_idx];
+        
+        int match = 1;
+        for (int j = 0; j < partial_len; j++) {
+            if (child->name[j] != partial[j]) {
+                match = 0;
+                break;
+            }
+        }
+        
+        if (match) {
+            str_copy(tab_matches[tab_match_count], child->name, MAX_NAME_LENGTH);
+            if (child->type == NODE_DIRECTORY) {
+                int len = str_len(tab_matches[tab_match_count]);
+                if (len < MAX_NAME_LENGTH - 1) {
+                    tab_matches[tab_match_count][len] = '/';
+                    tab_matches[tab_match_count][len + 1] = 0;
+                }
+            }
+            tab_match_count++;
+        }
+    }
+    
+    if (tab_match_count == 0) {
+        return;
+    } else if (tab_match_count == 1) {
+        // Single match - complete it
+        const char* completion = tab_matches[0];
+        int comp_len = str_len(completion);
+        
+        for (int i = word_start; i < 63; i++) {
+            video[(line_start + i)*2] = ' ';
+            video[(line_start + i)*2+1] = 0x07;
+        }
+        
+        *cmd_len = word_start;
+        for (int i = 0; i < comp_len && *cmd_len < 63; i++) {
+            cmd_buf[*cmd_len] = completion[i];
+            video[(line_start + *cmd_len)*2] = completion[i];
+            video[(line_start + *cmd_len)*2+1] = 0x0F;
+            (*cmd_len)++;
+        }
+        
+        *cmd_cursor = *cmd_len;
+        *cursor = line_start + *cmd_len;
+        
+        unsigned short pos = *cursor;
+        asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0F), "Nd"((unsigned short)0x3D4));
+        asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos & 0xFF)), "Nd"((unsigned short)0x3D5));
+        asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
+        asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
+        
+        tab_completion_active = 0;
+    } else {
+        // Multiple matches - show list and enable browsing mode
+        // Print all matches (each on new line)
+        for (int i = 0; i < tab_match_count; i++) {
+            print_string(tab_matches[i], -1, video, cursor, 0x0B);
+        }
+        
+        // Reprint prompt and first match (no extra line needed)
+        *cursor = ((*cursor / 80) + 1) * 80;
+        if (*cursor >= 80*25) {
+            scroll_screen(video);
+            *cursor -= 80;
+        }
+        
+        const char* prompt = "> ";
+        int pi = 0;
+        while (prompt[pi] && *cursor < 80*25 - 1) {
+            video[(*cursor)*2] = prompt[pi];
+            video[(*cursor)*2+1] = 0x0F;
+            (*cursor)++;
+            pi++;
+        }
+        
+        int new_line_start = *cursor;
+        
+        // Load first completion
+        *cmd_len = 0;
+        int j = 0;
+        while (tab_matches[0][j] && *cmd_len < 63) {
+            cmd_buf[*cmd_len] = tab_matches[0][j];
+            video[(new_line_start + *cmd_len)*2] = tab_matches[0][j];
+            video[(new_line_start + *cmd_len)*2+1] = 0x0F;
+            (*cmd_len)++;
+            j++;
+        }
+        
+        *cmd_cursor = *cmd_len;
+        *cursor = new_line_start + *cmd_len;
+        
+        // Enable tab completion browsing mode
+        tab_completion_active = 1;
+        tab_completion_position = 0;
+        
+        unsigned short pos = *cursor;
+        asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0F), "Nd"((unsigned short)0x3D4));
+        asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos & 0xFF)), "Nd"((unsigned short)0x3D5));
+        asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
+        asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
+    }
+}

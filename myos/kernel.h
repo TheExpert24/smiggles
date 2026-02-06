@@ -84,6 +84,10 @@ extern int line_start;
 extern int cmd_len;
 extern int cmd_cursor;
 extern int history_position;
+extern int tab_completion_active;
+extern int tab_completion_position;
+extern int tab_match_count;
+extern char tab_matches[32][32];
 
 // --- Function Declarations ---
 
@@ -131,6 +135,7 @@ void dispatch_command(const char* cmd, char* video, int* cursor);
 void add_to_history(const char* cmd);
 int find_file(const char* name);
 void handle_clear_command(char* video, int* cursor);
+void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* video, int* cursor, int line_start);
 
 // Time utilities
 unsigned char cmos_read(unsigned char reg);
