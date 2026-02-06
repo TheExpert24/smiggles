@@ -389,6 +389,113 @@ static void handle_tree_command(char* video, int* cursor) {
     print_tree(current_dir_idx, 0, video, cursor);
 }
 
+static void handle_grep_command(const char* args, char* video, int* cursor) {
+    // Parse pattern and filename
+    char pattern[64], filename[MAX_PATH_LENGTH];
+    int i = 0, j = 0;
+    
+    // Skip leading spaces
+    while (args[i] == ' ') i++;
+    
+    // Extract pattern (first argument)
+    while (args[i] && args[i] != ' ' && j < 63) {
+        pattern[j++] = args[i++];
+    }
+    pattern[j] = 0;
+    
+    // Skip spaces
+    while (args[i] == ' ') i++;
+    
+    // Extract filename (second argument)
+    j = 0;
+    while (args[i] && j < MAX_PATH_LENGTH - 1) {
+        filename[j++] = args[i++];
+    }
+    filename[j] = 0;
+    
+    if (pattern[0] == 0 || filename[0] == 0) {
+        print_string("Usage: grep pattern filename", 28, video, cursor, 0xC);
+        return;
+    }
+    
+    // Find the file
+    int file_idx = resolve_path(filename);
+    if (file_idx == -1 || node_table[file_idx].type != NODE_FILE) {
+        print_string("File not found", 14, video, cursor, 0xC);
+        return;
+    }
+    
+    // Search through file content line by line
+    char* content = node_table[file_idx].content;
+    int content_size = node_table[file_idx].content_size;
+    char line[128];
+    int line_num = 1;
+    int line_pos = 0;
+    int match_found = 0;
+    
+    for (int i = 0; i <= content_size; i++) {
+        if (i == content_size || content[i] == '\n') {
+            line[line_pos] = 0;
+            
+            // Simple substring search
+            int pattern_len = str_len(pattern);
+            int line_len = line_pos;
+            
+            for (int start = 0; start <= line_len - pattern_len; start++) {
+                int match = 1;
+                for (int k = 0; k < pattern_len; k++) {
+                    if (line[start + k] != pattern[k]) {
+                        match = 0;
+                        break;
+                    }
+                }
+                if (match) {
+                    match_found = 1;
+                    // Print line number and content
+                    char line_num_str[12];
+                    int_to_str(line_num, line_num_str);
+                    
+                    // Build the full line with line number
+                    char output_line[256];
+                    int out_pos = 0;
+                    
+                    // Add line number
+                    int num_len = str_len(line_num_str);
+                    for (int k = 0; k < num_len && out_pos < 255; k++) {
+                        output_line[out_pos++] = line_num_str[k];
+                    }
+                    
+                    // Add colon and space
+                    if (out_pos < 254) {
+                        output_line[out_pos++] = ':';
+                        output_line[out_pos++] = ' ';
+                    }
+                    
+                    // Add the line content
+                    for (int k = 0; k < line_pos && out_pos < 255; k++) {
+                        output_line[out_pos++] = line[k];
+                    }
+                    output_line[out_pos] = 0;
+                    
+                    print_string(output_line, out_pos, video, cursor, 0x0A);
+                    break;
+                }
+            }
+            
+            line_num++;
+            line_pos = 0;
+        } else {
+            if (line_pos < 127) {
+                line[line_pos++] = content[i];
+            }
+        }
+    }
+    
+    if (!match_found) {
+        print_string("No matches found", 16, video, cursor, 0x08);
+    }
+}
+
 static void handle_cp_command(const char* args, char* video, int* cursor) {
     // Parse source and destination
     char source[MAX_PATH_LENGTH], dest[MAX_PATH_LENGTH];
@@ -505,7 +612,7 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
     } else if (mini_strcmp(cmd, "about") == 0) {
         handle_command(cmd, video, cursor, "about", "Smiggles v1.0.0 is an operating system that is lightweight, easy to use, and\ndesigned for the normal user and the skilled web developer.", 0xD);
     } else if (mini_strcmp(cmd, "help") == 0) {
-        handle_command(cmd, video, cursor, "help", "Available commands:\npwd (print working directory)\ncd <path> (change directory)\nls (list files/directories)\nmkdir <path> (make directory)\nrmdir [-r] <path> (remove directory)\ntouch <path> (create file)\ncat <path> (read file)\nrm <path> (remove file)\ncp <src> <dst> (copy file)\nmv <old> <new> (rename/move)\ntree (directory tree)\nedit <file> (nano editor)\necho \"text\" > <file> (write to file)\nprint \"text\" (print text)\ntime (UTC time)\nclear/cls (clear screen)\ndf (filesystem usage)\nver (version info)\nuptime (system uptime)\nhalt (shutdown)\nreboot (restart)\nhistory (command history)", 0xD);
+        handle_command(cmd, video, cursor, "help", "Available commands:\npwd (print working directory)\ncd <path> (change directory)\nls (list files/directories)\nmkdir <path> (make directory)\nrmdir [-r] <path> (remove directory)\ntouch <path> (create file)\ncat <path> (read file)\nrm <path> (remove file)\ncp <src> <dst> (copy file)\nmv <old> <new> (rename/move)\ngrep <pattern> <file> (search in file)\ntree (directory tree)\nedit <file> (nano editor)\necho \"text\" > <file> (write to file)\nprint \"text\" (print text)\ntime (UTC time)\nclear/cls (clear screen)\ndf (filesystem usage)\nver (version info)\nuptime (system uptime)\nhalt (shutdown)\nreboot (restart)\nhistory (command history)", 0xD);
     } else if (is_math_expr(cmd)) {
         handle_calc_command(cmd, video, cursor);
     } else if (mini_strcmp(cmd, "lsall") == 0) {
@@ -526,6 +633,8 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
         handle_halt_command(video, cursor);
     } else if (mini_strcmp(cmd, "reboot") == 0) {
         handle_reboot_command();
+    } else if (cmd[0] == 'g' && cmd[1] == 'r' && cmd[2] == 'e' && cmd[3] == 'p' && cmd[4] == ' ') {
+        handle_grep_command(cmd + 5, video, cursor);
     } else if (cmd[0] == 'h' && cmd[1] == 'e' && cmd[2] == 'x' && cmd[3] == 'd' && cmd[4] == 'u' && cmd[5] == 'm' && cmd[6] == 'p') {
         handle_hexdump_command(cmd + 8, video, cursor);
     } else if (mini_strcmp(cmd, "history") == 0) {
