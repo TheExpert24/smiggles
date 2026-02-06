@@ -83,6 +83,7 @@ extern int history_count;
 extern int line_start;
 extern int cmd_len;
 extern int cmd_cursor;
+extern int history_position;
 
 // --- Function Declarations ---
 

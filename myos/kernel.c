@@ -4,7 +4,7 @@
 int line_start = 0;
 int cmd_len = 0;
 int cmd_cursor = 0;
-
+int history_position = -1;  // -1 means not navigating history
 
 void kernel_main(void) {
     // Initialize filesystem FIRST
@@ -80,23 +80,31 @@ void kernel_main(void) {
             continue;
         }
 
-        if (scancode > 0x80) {
-            prev_scancode = 0;
-            continue;
-        }
-        
-        if (scancode == prev_scancode || scancode == 0) continue;
-        prev_scancode = scancode;
-
         // Handle E0 prefix for arrow keys
         int e0_prefix = 0;
         if (scancode == 0xE0) {
             e0_prefix = 1;
-            // Get next scancode
+            // Get next scancode - wait for a valid make code
+            unsigned char next_scancode = 0;
             while (1) {
-                asm volatile("inb $0x60, %0" : "=a"(scancode));
-                if (scancode != 0xE0 && scancode != 0) break;
+                asm volatile("inb $0x60, %0" : "=a"(next_scancode));
+                if (next_scancode != 0xE0 && next_scancode != 0 && next_scancode < 0x80) {
+                    scancode = next_scancode;
+                    break;
+                }
             }
+        }
+
+        // Filter out release codes for non-E0 keys
+        if (!e0_prefix && scancode > 0x80) {
+            prev_scancode = 0;
+            continue;
+        }
+        
+        // For arrow keys, don't check prev_scancode to allow repeated presses
+        if (!e0_prefix) {
+            if (scancode == prev_scancode || scancode == 0) continue;
+            prev_scancode = scancode;
         }
 
         if (e0_prefix) {
@@ -110,6 +118,12 @@ void kernel_main(void) {
                     asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
                     asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
                 }
+                // Wait for key release
+                while (1) {
+                    unsigned char rel;
+                    asm volatile("inb $0x60, %0" : "=a"(rel));
+                    if (rel == 0xCB) break; // Release code for left arrow
+                }
                 continue;
             } else if (scancode == 0x4D) { // Right arrow
                 if (cmd_cursor < cmd_len) {
@@ -120,6 +134,93 @@ void kernel_main(void) {
                     asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos & 0xFF)), "Nd"((unsigned short)0x3D5));
                     asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
                     asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
+                }
+                // Wait for key release
+                while (1) {
+                    unsigned char rel;
+                    asm volatile("inb $0x60, %0" : "=a"(rel));
+                    if (rel == 0xCD) break; // Release code for right arrow
+                }
+                continue;
+            } else if (scancode == 0x48) { // Up arrow
+                if (history_count > 0) {
+                    // Clear current line
+                    for (int i = 0; i < cmd_len; i++) {
+                        video[(line_start + i)*2] = ' ';
+                        video[(line_start + i)*2+1] = 0x07;
+                    }
+                    
+                    // Move to previous command in history
+                    if (history_position == -1) {
+                        history_position = history_count - 1;
+                    } else if (history_position > 0) {
+                        history_position--;
+                    }
+                    
+                    // Load command from history
+                    cmd_len = 0;
+                    while (history[history_position][cmd_len] && cmd_len < 63) {
+                        cmd_buf[cmd_len] = history[history_position][cmd_len];
+                        video[(line_start + cmd_len)*2] = cmd_buf[cmd_len];
+                        video[(line_start + cmd_len)*2+1] = 0x0F;
+                        cmd_len++;
+                    }
+                    cmd_cursor = cmd_len;
+                    cursor = line_start + cmd_len;
+                    
+                    unsigned short pos = cursor;
+                    asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0F), "Nd"((unsigned short)0x3D4));
+                    asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos & 0xFF)), "Nd"((unsigned short)0x3D5));
+                    asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
+                    asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
+                }
+                // Wait for key release
+                while (1) {
+                    unsigned char rel;
+                    asm volatile("inb $0x60, %0" : "=a"(rel));
+                    if (rel == 0xC8) break; // Release code for up arrow
+                }
+                continue;
+            } else if (scancode == 0x50) { // Down arrow
+                if (history_position != -1) {
+                    // Clear current line
+                    for (int i = 0; i < cmd_len; i++) {
+                        video[(line_start + i)*2] = ' ';
+                        video[(line_start + i)*2+1] = 0x07;
+                    }
+                    
+                    // Move to next command in history
+                    if (history_position < history_count - 1) {
+                        history_position++;
+                        
+                        // Load command from history
+                        cmd_len = 0;
+                        while (history[history_position][cmd_len] && cmd_len < 63) {
+                            cmd_buf[cmd_len] = history[history_position][cmd_len];
+                            video[(line_start + cmd_len)*2] = cmd_buf[cmd_len];
+                            video[(line_start + cmd_len)*2+1] = 0x0F;
+                            cmd_len++;
+                        }
+                    } else {
+                        // Return to empty line
+                        history_position = -1;
+                        cmd_len = 0;
+                    }
+                    
+                    cmd_cursor = cmd_len;
+                    cursor = line_start + cmd_len;
+                    
+                    unsigned short pos = cursor;
+                    asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0F), "Nd"((unsigned short)0x3D4));
+                    asm volatile ("outb %0, %1" : : "a"((unsigned char)(pos & 0xFF)), "Nd"((unsigned short)0x3D5));
+                    asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0E), "Nd"((unsigned short)0x3D4));
+                    asm volatile ("outb %0, %1" : : "a"((unsigned char)((pos >> 8) & 0xFF)), "Nd"((unsigned short)0x3D5));
+                }
+                // Wait for key release
+                while (1) {
+                    unsigned char rel;
+                    asm volatile("inb $0x60, %0" : "=a"(rel));
+                    if (rel == 0xD0) break; // Release code for down arrow
                 }
                 continue;
             }
@@ -138,8 +239,7 @@ void kernel_main(void) {
             [0x2B] = '\\', [0x2C] = 'z', [0x2D] = 'x', [0x2E] = 'c', [0x2F] = 'v', [0x30] = 'b', [0x31] = 'n', [0x32] = 'm',
             [0x33] = ',', [0x34] = '.', [0x35] = '/', [0x39] = ' ', [0x1C] = '\n', [0x0E] = 8,
             [0x0F] = '\t',
-            [0x4F] = '1', [0x50] = '2', [0x51] = '3', [0x4B] = '4', [0x4C] = '5', [0x4D] = '6', [0x47] = '7', [0x48] = '8', [0x49] = '9', [0x52] = '0',
-            [0x53] = '.', [0x37] = '*', [0x4A] = '-', [0x4E] = '+', [0x35] = '/',
+            [0x37] = '*', [0x4A] = '-', [0x4E] = '+',
         };
         const char upper_table[128] = {
             [0x02] = '!', [0x03] = '@', [0x04] = '#', [0x05] = '$', [0x06] = '%', [0x07] = '^',
@@ -152,8 +252,7 @@ void kernel_main(void) {
             [0x2B] = '|', [0x2C] = 'Z', [0x2D] = 'X', [0x2E] = 'C', [0x2F] = 'V', [0x30] = 'B', [0x31] = 'N', [0x32] = 'M',
             [0x33] = '<', [0x34] = '>', [0x35] = '?', [0x39] = ' ', [0x1C] = '\n', [0x0E] = 8,
             [0x0F] = '\t',
-            [0x4F] = '1', [0x50] = '2', [0x51] = '3', [0x4B] = '4', [0x4C] = '5', [0x4D] = '6', [0x47] = '7', [0x48] = '8', [0x49] = '9', [0x52] = '0',
-            [0x53] = '.', [0x37] = '*', [0x4A] = '-', [0x4E] = '+', [0x35] = '/',
+            [0x37] = '*', [0x4A] = '-', [0x4E] = '+',
         };
 
         if (shift)
@@ -196,6 +295,7 @@ void kernel_main(void) {
                 line_start = cursor;
                 cmd_len = 0;
                 cmd_cursor = 0;
+                history_position = -1;  // Reset history navigation
             }
             else if (c == 8) {
                 if (cmd_cursor > 0 && cmd_len > 0 && cursor > line_start) {
