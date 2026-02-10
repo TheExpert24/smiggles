@@ -91,6 +91,11 @@ extern char tab_matches[32][32];
 
 // --- Function Declarations ---
 
+// Memory management
+void init_paging(void);
+void* alloc_page(void);
+void free_page(void* addr);
+
 // Interrupts
 void pic_remap(void);
 void set_idt_entry(int n, unsigned int handler);

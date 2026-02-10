@@ -18,6 +18,9 @@ kernel.o: kernel.c
 interrupts.o: interrupts.c
 	$(CC) -ffreestanding -c interrupts.c -o interrupts.o
 
+memory.o: memory.c
+	$(CC) -ffreestanding -c memory.c -o memory.o
+
 filesystem.o: filesystem.c
 	$(CC) -ffreestanding -c filesystem.c -o filesystem.o
 
@@ -33,8 +36,8 @@ editor.o: editor.c
 commands.o: commands.c
 	$(CC) -ffreestanding -c commands.c -o commands.o
 
-kernel.bin: kernel_entry.o kernel.o interrupts.o filesystem.o display.o calculator.o editor.o commands.o
-	$(LD) -Ttext 0x1000 kernel_entry.o kernel.o interrupts.o filesystem.o display.o calculator.o editor.o commands.o -o kernel.bin --oformat binary
+kernel.bin: kernel_entry.o kernel.o interrupts.o memory.o filesystem.o display.o calculator.o editor.o commands.o
+	$(LD) -Ttext 0x1000 kernel_entry.o kernel.o interrupts.o memory.o filesystem.o display.o calculator.o editor.o commands.o -o kernel.bin --oformat binary
 
 floppy.img: boot.bin kernel.bin
 	cat boot.bin kernel.bin > floppy.img

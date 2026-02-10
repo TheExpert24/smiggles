@@ -11,6 +11,9 @@ int tab_match_count = 0;
 char tab_matches[32][32];
 
 void kernel_main(void) {
+    // Initialize basic paging and frame allocator (virtual memory foundation)
+    init_paging();
+
     // Initialize filesystem FIRST
     init_filesystem();
     
