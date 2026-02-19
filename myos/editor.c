@@ -75,7 +75,7 @@ void nano_editor(const char* filename, char* video, int* cursor) {
         }
         if (scancode == 0x2A || scancode == 0x36) { shift = 1; continue; }
         if (scancode == 0x1D) { ctrl = 1; continue; }
-        if (ctrl && scancode == 0x1F) {
+        if (ctrl && scancode == 0x1F) { // Ctrl+S: Save
             node_table[node_idx].content_size = pos;
             buf[pos] = 0;
             while (1) {
@@ -86,9 +86,7 @@ void nano_editor(const char* filename, char* video, int* cursor) {
             exit_code = 1;
             break;
         }
-        if (ctrl && scancode == 0x10) {
-            node_table[node_idx].content_size = pos;
-            buf[pos] = 0;
+        if (ctrl && scancode == 0x10) { // Ctrl+Q: Quit (do not save)
             while (1) {
                 unsigned char sc;
                 asm volatile("inb $0x60, %0" : "=a"(sc));
