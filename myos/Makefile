@@ -4,7 +4,7 @@ CC=i686-elf-gcc
 LD=i686-elf-ld
 QEMU=qemu-system-i386
 
-all: floppy.img
+all: floppy.img hdd.img
 
 boot.bin: boot.asm
 	$(ASM) -f bin boot.asm -o boot.bin
@@ -48,8 +48,11 @@ kernel.bin: kernel_entry.o kernel.o interrupts.o memory.o filesystem.o display.o
 floppy.img: boot.bin kernel.bin
 	cat boot.bin kernel.bin > floppy.img
 	@ truncate -s 1474560 floppy.img
-run: floppy.img
-	$(QEMU) -fda floppy.img
+
+hdd.img:
+	@ if [ ! -f hdd.img ]; then qemu-img create -f raw hdd.img 10M; fi
+run: floppy.img hdd.img
+	$(QEMU) -fda floppy.img -hda hdd.img -serial stdio
 
 clean:
 	rm -f *.o *.bin *.img
