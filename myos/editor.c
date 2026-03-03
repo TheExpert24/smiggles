@@ -5,7 +5,6 @@
 
 // --- Nano-like Text Editor ---
 void nano_editor(const char* filename, char* video, int* cursor) {
-    fs_load(); // Always reload from disk before editing
     int node_idx = resolve_path(filename);
     if (node_idx == -1 || node_table[node_idx].type != NODE_FILE) {
         // Create file if it doesn't exist
