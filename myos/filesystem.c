@@ -13,7 +13,12 @@ static void* my_memcpy(void* dest, const void* src, unsigned int n) {
 extern void print_string(const char* str, int len, char* video, int* cursor, unsigned char color);
 
 // Persistent filesystem state
+#define FS_IMAGE_MAGIC 0x534D4947u
+#define FS_IMAGE_VERSION 5u
+
 struct FSImage {
+    uint32_t magic;
+    uint32_t version;
     FSNode node_table[MAX_NODES];
     int node_count;
     int current_dir_idx;
@@ -37,6 +42,8 @@ static void fsimage_to_globals() {
 }
 // Update fs_image from global variables
 static void globals_to_fsimage() {
+    fs_image.magic = FS_IMAGE_MAGIC;
+    fs_image.version = FS_IMAGE_VERSION;
     my_memcpy(fs_image.node_table, node_table, sizeof(node_table));
     fs_image.node_count = node_count;
     fs_image.current_dir_idx = current_dir_idx;
@@ -124,12 +131,6 @@ void init_filesystem() {
     node_table[0].name[1] = 0;
     node_count = 1;
     current_dir_idx = 0;
-    
-    // Create default directories
-    fs_mkdir("/home");
-    fs_mkdir("/bin");
-    fs_mkdir("/tmp");
-    fs_mkdir("/etc");
 }
 
 void get_full_path(int node_idx, char* path, int max_len) {
@@ -310,10 +311,6 @@ int fs_mkdir(const char* path) {
 }
 
 int fs_touch(const char* path, const char* content) {
-        // Debug print before fs_save
-        volatile char* vga = (volatile char*)0xB8000;
-        const char* msg1 = "Before fs_save";
-        for (int j = 0; msg1[j]; j++) { vga[j*2] = msg1[j]; vga[j*2+1] = 0x2F; }
     char parent_path[MAX_PATH_LENGTH];
     char filename[MAX_NAME_LENGTH];
     
@@ -338,6 +335,7 @@ int fs_touch(const char* path, const char* content) {
     }
     
     if (parent_idx == -1) return -1;
+    if (!node_table[parent_idx].used || node_table[parent_idx].type != NODE_DIRECTORY) return -1;
     
     // Check if already exists
     for (int i = 0; i < node_table[parent_idx].child_count; i++) {
@@ -390,9 +388,6 @@ int fs_touch(const char* path, const char* content) {
     
     int ret = new_idx;
     fs_save();
-    // Debug print after fs_save
-    const char* msg2 = "After fs_save";
-    for (int j = 0; msg2[j]; j++) { vga[40+j*2] = msg2[j]; vga[40+j*2+1] = 0x2F; }
     return ret;
 }
 
@@ -428,6 +423,7 @@ int fs_rm(const char* path, int recursive) {
     }
     
     node_table[node_idx].used = 0;
+    fs_save();
     return 0;
 }
 
@@ -469,6 +465,7 @@ void fs_load() {
     for (int i = 0; i < FS_SECTOR_COUNT; i++) {
         if (disk_read_sector(FS_DISK_SECTOR + i, sector_buf) != 0) {
             ok = 0;
+            for (int j = 0; j < 512; j++) sector_buf[j] = 0;
         }
         int offset = i * 512;
         int to_copy = sizeof(fs_image) - offset;
@@ -476,7 +473,7 @@ void fs_load() {
         if (to_copy > 0)
             my_memcpy(img_ptr + offset, sector_buf, to_copy);
     }
-    if (ok) {
+    if (ok && fs_image.magic == FS_IMAGE_MAGIC && fs_image.version == FS_IMAGE_VERSION) {
         fsimage_to_globals();
     }
 }

@@ -1,5 +1,26 @@
 #include "kernel.h"
 
+static int fs_state_is_valid(void) {
+    if (!node_table[0].used) return 0;
+    if (node_table[0].type != NODE_DIRECTORY) return 0;
+    if (node_table[0].parent_idx != -1) return 0;
+
+    if (current_dir_idx < 0 || current_dir_idx >= MAX_NODES) return 0;
+    if (!node_table[current_dir_idx].used) return 0;
+    if (node_table[current_dir_idx].type != NODE_DIRECTORY) return 0;
+
+    for (int i = 0; i < MAX_NODES; i++) {
+        if (!node_table[i].used) continue;
+        if (i == 0) continue;
+        int parent = node_table[i].parent_idx;
+        if (parent < 0 || parent >= MAX_NODES) return 0;
+        if (!node_table[parent].used) return 0;
+        if (node_table[parent].type != NODE_DIRECTORY) return 0;
+    }
+
+    return 1;
+}
+
 // --- Global Variables ---
 int line_start = 0;
 int cmd_len = 0;
@@ -14,16 +35,9 @@ void kernel_main(void) {
     // Initialize basic paging and frame allocator (virtual memory foundation)
     init_paging();
 
-    // Try to load filesystem from disk; if it fails, initialize a new one
-    int fs_ok = 1;
-    unsigned char* buf = (unsigned char*)node_table;
-    for (int i = 0; i < FS_SECTOR_COUNT; i++) {
-        if (disk_read_sector(FS_DISK_SECTOR + i, buf + i * 512) != 0) {
-            fs_ok = 0;
-            break;
-        }
-    }
-    if (!fs_ok) {
+    // Load filesystem image from disk and validate; if invalid, initialize a new one
+    fs_load();
+    if (!fs_state_is_valid()) {
         init_filesystem();
         fs_save();
     }
@@ -31,7 +45,10 @@ void kernel_main(void) {
     // --- Interrupt setup ---
     pic_remap();
     set_idt_entry(0x20, (unsigned int)irq0_timer_handler);
-    set_idt_entry(0x21, (unsigned int)irq1_keyboard_handler);
+    // Keyboard input is handled by polling in the main loop.
+    // Mask IRQ1 to avoid racing reads from port 0x60 (IRQ handler vs polling).
+    asm volatile("outb %0, %1" : : "a"((unsigned char)0xFE), "Nd"((uint16_t)PIC1_DATA));
+    asm volatile("outb %0, %1" : : "a"((unsigned char)0xFF), "Nd"((uint16_t)PIC2_DATA));
     extern struct IDT_ptr idt_ptr;
     extern struct IDT_entry idt[256];
     idt_ptr.limit = sizeof(idt) - 1;

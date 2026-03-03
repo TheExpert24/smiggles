@@ -5,8 +5,8 @@
 
 #define ATA_PRIMARY_IO  0x1F0
 #define ATA_PRIMARY_CTRL 0x3F6
-#define ATA_MASTER      0xA0
-#define ATA_SLAVE       0xB0
+#define ATA_MASTER      0xE0
+#define ATA_SLAVE       0xF0
 
 static void io_wait() {
     for (volatile int i = 0; i < 1000; i++); // crude delay

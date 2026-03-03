@@ -11,8 +11,8 @@
 // --- Common Definitions ---
 #define MAX_PATH_LENGTH 128
 #define MAX_NAME_LENGTH 32
-#define MAX_CHILDREN 16
-#define MAX_NODES 8
+#define MAX_CHILDREN 32
+#define MAX_NODES 32
 #define MAX_FILE_CONTENT 64
 #define MAX_FILE_NAME 32
 #define MAX_FILES 8

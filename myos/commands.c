@@ -132,15 +132,9 @@ static void handle_cat_command(const char* filename, char* video, int* cursor, u
 }
 
 static void handle_echo_command(const char* text, const char* filename, char* video, int* cursor, unsigned char color_unused) {
-        // Debug print before fs_save
-        volatile char* vga = (volatile char*)0xB8000;
-        const char* msg1 = "Before fs_save";
-        for (int j = 0; msg1[j]; j++) { vga[j*2] = msg1[j]; vga[j*2+1] = 0x2F; }
     int node_idx = resolve_path(filename);
     if (node_idx == -1) {
         node_idx = fs_touch(filename, text);
-        fs_load(); // Ensure in-memory state matches disk after creation
-        node_idx = resolve_path(filename);
     }
     if (node_idx >= 0 && node_table[node_idx].type == NODE_FILE) {
         int len = 0;
@@ -151,10 +145,6 @@ static void handle_echo_command(const char* text, const char* filename, char* vi
         node_table[node_idx].content[len] = 0;
         node_table[node_idx].content_size = len;
         fs_save();
-        // Debug print after fs_save
-        const char* msg2 = "After fs_save";
-        for (int j = 0; msg2[j]; j++) { vga[40+j*2] = msg2[j]; vga[40+j*2+1] = 0x2F; }
-        fs_load(); // Ensure in-memory state matches disk after write
         print_string("OK", 2, video, cursor, 0xA);
     } else {
         print_string("Cannot write file", 17, video, cursor, 0xC);

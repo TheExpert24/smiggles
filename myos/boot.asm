@@ -28,16 +28,35 @@ load_kernel:
     mov ax, 0x1000
     mov es, ax
 
+    ; Load kernel sectors one-by-one so we can safely cross tracks.
+    ; Keep this comfortably above current kernel.bin size.
+    mov si, 96          ; sectors to read
+    mov ch, 0           ; cylinder
+    mov dh, 0           ; head
+    mov cl, 2           ; sector (starts after boot sector)
+    mov bx, 0x0000      ; destination offset in ES
+
+.read_next_sector:
     mov ah, 0x02
-    ; NOTE: This must be >= ceil(kernel.bin_size / 512).
-    ; kernel.bin is currently ~28 KiB, so 64 sectors (~32 KiB) is safe.
-    mov al, 64
-    mov ch, 0
-    mov cl, 2
-    mov dh, 0
-    mov bx, 0x0000
+    mov al, 0x01
     int 0x13
     jc disk_error
+
+    add bx, 512
+
+    inc cl
+    cmp cl, 19          ; sectors are 1..18
+    jl .sector_ok
+    mov cl, 1
+    inc dh
+    cmp dh, 2           ; heads 0..1
+    jl .sector_ok
+    mov dh, 0
+    inc ch
+
+.sector_ok:
+    dec si
+    jnz .read_next_sector
 
     lgdt [gdt_desc]
     mov eax, cr0
