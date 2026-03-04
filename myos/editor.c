@@ -1,5 +1,72 @@
 #include "kernel.h"
 
+#define EDIT_ROWS 22
+#define EDIT_COLS 80
+
+static void logical_pos_for_index(const char* buf, int index, int* out_row, int* out_col) {
+    int row = 0;
+    int col = 0;
+    for (int i = 0; i < index; i++) {
+        if (buf[i] == '\n') {
+            row++;
+            col = 0;
+        } else {
+            col++;
+            if (col >= EDIT_COLS) {
+                row++;
+                col = 0;
+            }
+        }
+    }
+    *out_row = row;
+    *out_col = col;
+}
+
+static void render_editor_view(const char* buf, int len, char* video, int edit_start, int view_top_row) {
+    char desired_chars[EDIT_ROWS * EDIT_COLS];
+    unsigned char desired_attrs[EDIT_ROWS * EDIT_COLS];
+
+    for (int i = 0; i < EDIT_ROWS * EDIT_COLS; i++) {
+        desired_chars[i] = ' ';
+        desired_attrs[i] = 0x07;
+    }
+
+    int logical_row = 0;
+    int logical_col = 0;
+    for (int i = 0; i < len; i++) {
+        if (buf[i] != '\n') {
+            if (logical_row >= view_top_row && logical_row < view_top_row + EDIT_ROWS) {
+                int screen_row = logical_row - view_top_row;
+                int cell = screen_row * EDIT_COLS + logical_col;
+                desired_chars[cell] = buf[i];
+                desired_attrs[cell] = 0x0F;
+            }
+
+            logical_col++;
+            if (logical_col >= EDIT_COLS) {
+                logical_row++;
+                logical_col = 0;
+            }
+        } else {
+            logical_row++;
+            logical_col = 0;
+        }
+    }
+
+    for (int r = 0; r < EDIT_ROWS; r++) {
+        for (int c = 0; c < EDIT_COLS; c++) {
+            int cell = r * EDIT_COLS + c;
+            int idx = edit_start + cell;
+            char current_char = video[idx * 2];
+            unsigned char current_attr = (unsigned char)video[idx * 2 + 1];
+            if (current_char != desired_chars[cell] || current_attr != desired_attrs[cell]) {
+                video[idx * 2] = desired_chars[cell];
+                video[idx * 2 + 1] = desired_attrs[cell];
+            }
+        }
+    }
+}
+
 // --- Global Variables ---
 // file_table and file_count removed; use node_table only
 
@@ -63,6 +130,20 @@ void nano_editor(const char* filename, char* video, int* cursor) {
     }
     *cursor = edit_start + cursor_row * 80 + cursor_col;
     set_cursor_position(*cursor);
+
+    int view_top_row = 0;
+    int initial_row = 0;
+    int initial_col = 0;
+    logical_pos_for_index(buf, pos, &initial_row, &initial_col);
+    if (initial_row >= EDIT_ROWS) {
+        view_top_row = initial_row - EDIT_ROWS + 1;
+    }
+    render_editor_view(buf, pos, video, edit_start, view_top_row);
+    int initial_screen_row = initial_row - view_top_row;
+    int initial_pos = edit_start + initial_screen_row * EDIT_COLS + initial_col;
+    if (initial_pos >= 80*25) initial_pos = 80*25 - 1;
+    *cursor = initial_pos;
+    set_cursor_position(*cursor);
     
     int shift = 0, ctrl = 0;
     unsigned char prev_scancode = 0;
@@ -123,32 +204,23 @@ void nano_editor(const char* filename, char* video, int* cursor) {
                 buf[pos++] = c;
             }
         }
-        int redraw_cursor = edit_start;
-        for (int i = 0; i < pos && redraw_cursor < 80*25; i++) {
-            if (buf[i] == '\n') {
-                redraw_cursor = ((redraw_cursor / 80) + 1) * 80;
-            } else {
-                video[(redraw_cursor)*2] = buf[i];
-                video[(redraw_cursor)*2+1] = 0x0F;
-                redraw_cursor++;
-            }
+        int cur_row = 0;
+        int cur_col = 0;
+        logical_pos_for_index(buf, pos, &cur_row, &cur_col);
+
+        if (cur_row < view_top_row) {
+            view_top_row = cur_row;
+        } else if (cur_row >= view_top_row + EDIT_ROWS) {
+            view_top_row = cur_row - EDIT_ROWS + 1;
         }
-        for (; redraw_cursor < 80*25; redraw_cursor++) {
-            video[(redraw_cursor)*2] = ' ';
-            video[(redraw_cursor)*2+1] = 0x07;
-        }
-        int cur_row = 0, cur_col = 0, temp = 0;
-        for (int i = 0; i < pos; i++) {
-            if (buf[i] == '\n') {
-                cur_row++;
-                cur_col = 0;
-                temp = 0;
-            } else {
-                cur_col++;
-                temp++;
-            }
-        }
-        int cur_pos = edit_start + cur_row * 80 + cur_col;
+
+        render_editor_view(buf, pos, video, edit_start, view_top_row);
+
+        int screen_row = cur_row - view_top_row;
+        if (screen_row < 0) screen_row = 0;
+        if (screen_row >= EDIT_ROWS) screen_row = EDIT_ROWS - 1;
+
+        int cur_pos = edit_start + screen_row * EDIT_COLS + cur_col;
         if (cur_pos >= 80*25) cur_pos = 80*25 - 1;
         *cursor = cur_pos;
         set_cursor_position(*cursor);
