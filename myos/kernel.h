@@ -1,6 +1,6 @@
 #define FS_DISK_SECTOR 10 // Start sector for filesystem data
-// Increase sector count to fit the full fs_image struct (calculate: sizeof(FSNode)*MAX_NODES + sizeof(RamDir)*MAX_DIRS + ints)
-#define FS_SECTOR_COUNT 56 // 56*512 = 28672 bytes, enough for all metadata and files
+// Persistent filesystem image size (must be >= sizeof(struct FSImage) in filesystem.c)
+#define FS_SECTOR_COUNT 160 // 160*512 = 81920 bytes
 
 // Static assert to ensure persistent image is large enough for FSImage
 #ifndef KERNEL_H
@@ -13,12 +13,13 @@
 #define MAX_NAME_LENGTH 32
 #define MAX_CHILDREN 32
 #define MAX_NODES 32
-#define MAX_FILE_CONTENT 64
+#define MAX_FILE_CONTENT 2048
 #define MAX_FILE_NAME 32
 #define MAX_FILES 8
 #define MAX_FILE_SIZE 128
 #define MAX_DIRS 4
 #define MAX_DIR_NAME 32
+#define MAX_CMD_BUFFER 2048
 
 // --- Process Management ---
 #define MAX_PROCESSES 8
@@ -143,6 +144,7 @@ void pic_remap(void);
 void set_idt_entry(int n, unsigned int handler);
 void timer_handler(void);
 void keyboard_handler(void);
+int keyboard_pop_scancode(unsigned char* out_scancode);
 extern void load_idt(void*);
 extern void irq0_timer_handler();
 extern void irq1_keyboard_handler();

@@ -27,6 +27,10 @@ struct FSImage {
     int current_dir;
     } __attribute__((packed));
 
+typedef char fs_image_must_fit_in_reserved_sectors[
+    (sizeof(struct FSImage) <= (FS_SECTOR_COUNT * 512)) ? 1 : -1
+];
+
 // NOTE: To check persistent image size, print sizeof(struct FSImage) in a test program or with a build-time assert in a C file where both struct FSImage and FS_SECTOR_COUNT are visible.
 
 static struct FSImage fs_image;
@@ -435,7 +439,6 @@ void fs_save() {
     globals_to_fsimage();
     unsigned char sector_buf[512];
     unsigned char* img_ptr = (unsigned char*)&fs_image;
-    int ok = 1;
     for (int i = 0; i < FS_SECTOR_COUNT; i++) {
         // Zero out the buffer for the last sector
         for (int j = 0; j < 512; j++) sector_buf[j] = 0;
@@ -445,14 +448,13 @@ void fs_save() {
         if (to_copy > 0)
             my_memcpy(sector_buf, img_ptr + offset, to_copy);
         if (disk_write_sector(FS_DISK_SECTOR + i, sector_buf) != 0) {
-            ok = 0;
             volatile char* vga = (volatile char*)0xB8000;
-            const char* msg = "Disk write error!";
+            const char* msg = "Disk write error (non-fatal)!";
             for (int j = 0; msg[j]; j++) {
                 vga[j*2] = msg[j];
                 vga[j*2+1] = 0x4F;
             }
-            while (1) { __asm__("hlt"); }
+            return;
         }
     }
 }

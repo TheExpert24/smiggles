@@ -300,7 +300,6 @@ static void handle_ver_command(char* video, int* cursor) {
 }
 
 static void handle_uptime_command(char* video, int* cursor) {
-    static int ticks = 0;
     char buf[64] = "Uptime: ";
     char temp[12];
     int_to_str(ticks / 18, temp);
@@ -398,19 +397,35 @@ static void handle_grep_command(const char* args, char* video, int* cursor) {
     // Skip leading spaces
     while (args[i] == ' ') i++;
     
-    // Extract pattern (first argument)
-    while (args[i] && args[i] != ' ' && j < 63) {
-        pattern[j++] = args[i++];
+    // Extract pattern (first argument), supports quoted patterns
+    if (args[i] == '"') {
+        i++; // skip opening quote
+        while (args[i] && args[i] != '"' && j < 63) {
+            pattern[j++] = args[i++];
+        }
+        if (args[i] == '"') i++; // skip closing quote
+    } else {
+        while (args[i] && args[i] != ' ' && j < 63) {
+            pattern[j++] = args[i++];
+        }
     }
     pattern[j] = 0;
     
     // Skip spaces
     while (args[i] == ' ') i++;
     
-    // Extract filename (second argument)
+    // Extract filename (second argument), supports quoted filenames
     j = 0;
-    while (args[i] && j < MAX_PATH_LENGTH - 1) {
-        filename[j++] = args[i++];
+    if (args[i] == '"') {
+        i++; // skip opening quote
+        while (args[i] && args[i] != '"' && j < MAX_PATH_LENGTH - 1) {
+            filename[j++] = args[i++];
+        }
+        if (args[i] == '"') i++; // skip closing quote
+    } else {
+        while (args[i] && args[i] != ' ' && j < MAX_PATH_LENGTH - 1) {
+            filename[j++] = args[i++];
+        }
     }
     filename[j] = 0;
     
@@ -429,8 +444,7 @@ static void handle_grep_command(const char* args, char* video, int* cursor) {
     // Search through file content line by line
     char* content = node_table[file_idx].content;
     int content_size = node_table[file_idx].content_size;
-    char line[128];
-    int line_num = 1;
+    char line[MAX_FILE_CONTENT];
     int line_pos = 0;
     int match_found = 0;
     
@@ -452,41 +466,14 @@ static void handle_grep_command(const char* args, char* video, int* cursor) {
                 }
                 if (match) {
                     match_found = 1;
-                    // Print line number and content
-                    char line_num_str[12];
-                    int_to_str(line_num, line_num_str);
-                    
-                    // Build the full line with line number
-                    char output_line[256];
-                    int out_pos = 0;
-                    
-                    // Add line number
-                    int num_len = str_len(line_num_str);
-                    for (int k = 0; k < num_len && out_pos < 255; k++) {
-                        output_line[out_pos++] = line_num_str[k];
-                    }
-                    
-                    // Add colon and space
-                    if (out_pos < 254) {
-                        output_line[out_pos++] = ':';
-                        output_line[out_pos++] = ' ';
-                    }
-                    
-                    // Add the line content
-                    for (int k = 0; k < line_pos && out_pos < 255; k++) {
-                        output_line[out_pos++] = line[k];
-                    }
-                    output_line[out_pos] = 0;
-                    
-                    print_string(output_line, out_pos, video, cursor, 0x0A);
+                    print_string(line, line_pos, video, cursor, 0x0A);
                     break;
                 }
             }
             
-            line_num++;
             line_pos = 0;
         } else {
-            if (line_pos < 127) {
+            if (line_pos < MAX_FILE_CONTENT - 1) {
                 line[line_pos++] = content[i];
             }
         }
@@ -688,11 +675,12 @@ void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* v
     int cmd_count = 27;
     
     // Find what we're trying to complete
-    int word_start = *cmd_len - 1;
+    int word_start = *cmd_len;
     while (word_start > 0 && cmd_buf[word_start - 1] != ' ') word_start--;
     
-    char partial[64];
+    char partial[MAX_CMD_BUFFER];
     int partial_len = *cmd_len - word_start;
+    if (partial_len > MAX_CMD_BUFFER - 1) partial_len = MAX_CMD_BUFFER - 1;
     for (int i = 0; i < partial_len; i++) {
         partial[i] = cmd_buf[word_start + i];
     }
@@ -752,13 +740,13 @@ void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* v
         const char* completion = tab_matches[0];
         int comp_len = str_len(completion);
         
-        for (int i = word_start; i < 63; i++) {
+        for (int i = word_start; i < *cmd_len; i++) {
             video[(line_start + i)*2] = ' ';
             video[(line_start + i)*2+1] = 0x07;
         }
         
         *cmd_len = word_start;
-        for (int i = 0; i < comp_len && *cmd_len < 63; i++) {
+        for (int i = 0; i < comp_len && *cmd_len < (MAX_CMD_BUFFER - 1); i++) {
             cmd_buf[*cmd_len] = completion[i];
             video[(line_start + *cmd_len)*2] = completion[i];
             video[(line_start + *cmd_len)*2+1] = 0x0F;
@@ -803,7 +791,7 @@ void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* v
         // Load first completion
         *cmd_len = 0;
         int j = 0;
-        while (tab_matches[0][j] && *cmd_len < 63) {
+        while (tab_matches[0][j] && *cmd_len < (MAX_CMD_BUFFER - 1)) {
             cmd_buf[*cmd_len] = tab_matches[0][j];
             video[(new_line_start + *cmd_len)*2] = tab_matches[0][j];
             video[(new_line_start + *cmd_len)*2+1] = 0x0F;

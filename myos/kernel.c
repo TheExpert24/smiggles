@@ -34,6 +34,7 @@ char tab_matches[32][32];
 void kernel_main(void) {
     // Initialize basic paging and frame allocator (virtual memory foundation)
     init_paging();
+    init_process_table();
 
     // Load filesystem image from disk and validate; if invalid, initialize a new one
     fs_load();
@@ -45,9 +46,9 @@ void kernel_main(void) {
     // --- Interrupt setup ---
     pic_remap();
     set_idt_entry(0x20, (unsigned int)irq0_timer_handler);
-    // Keyboard input is handled by polling in the main loop.
-    // Mask IRQ1 to avoid racing reads from port 0x60 (IRQ handler vs polling).
-    asm volatile("outb %0, %1" : : "a"((unsigned char)0xFE), "Nd"((uint16_t)PIC1_DATA));
+    set_idt_entry(0x21, (unsigned int)irq1_keyboard_handler);
+    // Unmask IRQ0 (timer) and IRQ1 (keyboard)
+    asm volatile("outb %0, %1" : : "a"((unsigned char)0xFC), "Nd"((uint16_t)PIC1_DATA));
     asm volatile("outb %0, %1" : : "a"((unsigned char)0xFF), "Nd"((uint16_t)PIC2_DATA));
     extern struct IDT_ptr idt_ptr;
     extern struct IDT_entry idt[256];
@@ -86,7 +87,7 @@ void kernel_main(void) {
     set_cursor_position(cursor);
 
     
-    char cmd_buf[64];
+    char cmd_buf[MAX_CMD_BUFFER];
     // Use global cmd_len and cmd_cursor so nano_editor can reset them
     // int cmd_len = 0;
     // int cmd_cursor = 0; // position within the input line
@@ -100,7 +101,9 @@ void kernel_main(void) {
     // Continue with normal kernel loop
     while (1) {
         unsigned char scancode;
-        asm volatile("inb $0x60, %0" : "=a"(scancode));
+        if (!keyboard_pop_scancode(&scancode)) {
+            continue;
+        }
 
         //SHIFT KEYS
         if (scancode == 0x2A || scancode == 0x36) { 
@@ -119,7 +122,9 @@ void kernel_main(void) {
             // Get next scancode - wait for a valid make code
             unsigned char next_scancode = 0;
             while (1) {
-                asm volatile("inb $0x60, %0" : "=a"(next_scancode));
+                if (!keyboard_pop_scancode(&next_scancode)) {
+                    continue;
+                }
                 if (next_scancode != 0xE0 && next_scancode != 0 && next_scancode < 0x80) {
                     scancode = next_scancode;
                     break;
@@ -154,7 +159,7 @@ void kernel_main(void) {
                     // Write selected completion
                     cmd_len = 0;
                     int j = 0;
-                    while (tab_matches[tab_completion_position][j] && cmd_len < 63) {
+                    while (tab_matches[tab_completion_position][j] && cmd_len < (MAX_CMD_BUFFER - 1)) {
                         cmd_buf[cmd_len] = tab_matches[tab_completion_position][j];
                         video[(line_start + cmd_len)*2] = tab_matches[tab_completion_position][j];
                         video[(line_start + cmd_len)*2+1] = 0x0F;
@@ -173,7 +178,9 @@ void kernel_main(void) {
                 // Wait for key release
                 while (1) {
                     unsigned char rel;
-                    asm volatile("inb $0x60, %0" : "=a"(rel));
+                    if (!keyboard_pop_scancode(&rel)) {
+                        continue;
+                    }
                     if (rel == 0xCB) break; // Release code for left arrow
                 }
                 continue;
@@ -191,7 +198,7 @@ void kernel_main(void) {
                     // Write selected completion
                     cmd_len = 0;
                     int j = 0;
-                    while (tab_matches[tab_completion_position][j] && cmd_len < 63) {
+                    while (tab_matches[tab_completion_position][j] && cmd_len < (MAX_CMD_BUFFER - 1)) {
                         cmd_buf[cmd_len] = tab_matches[tab_completion_position][j];
                         video[(line_start + cmd_len)*2] = tab_matches[tab_completion_position][j];
                         video[(line_start + cmd_len)*2+1] = 0x0F;
@@ -210,7 +217,9 @@ void kernel_main(void) {
                 // Wait for key release
                 while (1) {
                     unsigned char rel;
-                    asm volatile("inb $0x60, %0" : "=a"(rel));
+                    if (!keyboard_pop_scancode(&rel)) {
+                        continue;
+                    }
                     if (rel == 0xCD) break; // Release code for right arrow
                 }
                 continue;
@@ -231,7 +240,7 @@ void kernel_main(void) {
                     
                     // Load command from history
                     cmd_len = 0;
-                    while (history[history_position][cmd_len] && cmd_len < 63) {
+                    while (history[history_position][cmd_len] && cmd_len < (MAX_CMD_BUFFER - 1)) {
                         cmd_buf[cmd_len] = history[history_position][cmd_len];
                         video[(line_start + cmd_len)*2] = cmd_buf[cmd_len];
                         video[(line_start + cmd_len)*2+1] = 0x0F;
@@ -245,7 +254,9 @@ void kernel_main(void) {
                 // Wait for key release
                 while (1) {
                     unsigned char rel;
-                    asm volatile("inb $0x60, %0" : "=a"(rel));
+                    if (!keyboard_pop_scancode(&rel)) {
+                        continue;
+                    }
                     if (rel == 0xC8) break; // Release code for up arrow
                 }
                 continue;
@@ -263,7 +274,7 @@ void kernel_main(void) {
                         
                         // Load command from history
                         cmd_len = 0;
-                        while (history[history_position][cmd_len] && cmd_len < 63) {
+                        while (history[history_position][cmd_len] && cmd_len < (MAX_CMD_BUFFER - 1)) {
                             cmd_buf[cmd_len] = history[history_position][cmd_len];
                             video[(line_start + cmd_len)*2] = cmd_buf[cmd_len];
                             video[(line_start + cmd_len)*2+1] = 0x0F;
@@ -283,7 +294,9 @@ void kernel_main(void) {
                 // Wait for key release
                 while (1) {
                     unsigned char rel;
-                    asm volatile("inb $0x60, %0" : "=a"(rel));
+                    if (!keyboard_pop_scancode(&rel)) {
+                        continue;
+                    }
                     if (rel == 0xD0) break; // Release code for down arrow
                 }
                 continue;
@@ -361,20 +374,46 @@ void kernel_main(void) {
                 }
             }
             else {
-                if (cursor % 80 == 0 && cursor != line_start && cursor < 80*25) {
-                    if (cursor >= 80*25) {
-                        scroll_screen(video);
-                        cursor -= 80;
-                    }
-                }
-                if (cursor < 80*25 - 1 && c != '\t') {
-                    if (cmd_len < 63) {
+                if (c != '\t' && cmd_len < (MAX_CMD_BUFFER - 1)) {
+                    if (cmd_cursor == cmd_len) {
+                        if (cursor >= 80*25) {
+                            scroll_screen(video);
+                            cursor -= 80;
+                            if (line_start >= 80) line_start -= 80;
+                            else line_start = 0;
+                        }
+
+                        video[cursor*2] = c;
+                        video[cursor*2+1] = 0x0F;
+                        cmd_buf[cmd_cursor] = c;
+                        cmd_len++;
+                        cmd_cursor++;
+                        cursor++;
+
+                        if (cursor >= 80*25) {
+                            scroll_screen(video);
+                            cursor -= 80;
+                            if (line_start >= 80) line_start -= 80;
+                            else line_start = 0;
+                        }
+
+                        set_cursor_position(cursor);
+                    } else {
+                        if (cursor >= 80*25) {
+                            scroll_screen(video);
+                            cursor -= 80;
+                            if (line_start >= 80) line_start -= 80;
+                            else line_start = 0;
+                        }
+
                         for (int k = cmd_len; k > cmd_cursor; k--)
                             cmd_buf[k] = cmd_buf[k-1];
                         cmd_buf[cmd_cursor] = c;
                         cmd_len++;
+
                         int redraw = cursor;
                         for (int k = 0; k < cmd_len-cmd_cursor; k++) {
+                            if (redraw + k >= 80*25) break;
                             video[(redraw+k)*2] = cmd_buf[cmd_cursor+k];
                             video[(redraw+k)*2+1] = 0x0F;
                         }

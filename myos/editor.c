@@ -70,7 +70,9 @@ void nano_editor(const char* filename, char* video, int* cursor) {
     
     while (editing) {
         unsigned char scancode;
-        asm volatile("inb $0x60, %0" : "=a"(scancode));
+        if (!keyboard_pop_scancode(&scancode)) {
+            continue;
+        }
         if (scancode == prev_scancode || scancode == 0) continue;
         prev_scancode = scancode;
         if (scancode & 0x80) {
@@ -88,7 +90,9 @@ void nano_editor(const char* filename, char* video, int* cursor) {
             fs_save();
             while (1) {
                 unsigned char sc;
-                asm volatile("inb $0x60, %0" : "=a"(sc));
+                if (!keyboard_pop_scancode(&sc)) {
+                    continue;
+                }
                 if (sc == 0x9D) break;
             }
             exit_code = 1;
@@ -97,7 +101,9 @@ void nano_editor(const char* filename, char* video, int* cursor) {
         if (ctrl && scancode == 0x10) { // Ctrl+Q: Quit (do not save)
             while (1) {
                 unsigned char sc;
-                asm volatile("inb $0x60, %0" : "=a"(sc));
+                if (!keyboard_pop_scancode(&sc)) {
+                    continue;
+                }
                 if (sc == 0x9D) break;
             }
             exit_code = 2;
@@ -115,9 +121,6 @@ void nano_editor(const char* filename, char* video, int* cursor) {
             char c = scancode_to_char(scancode, shift);
             if (c && pos < maxlen) {
                 buf[pos++] = c;
-                video[(draw_cursor)*2] = c;
-                video[(draw_cursor)*2+1] = 0x0F;
-                draw_cursor++;
             }
         }
         int redraw_cursor = edit_start;
@@ -146,6 +149,7 @@ void nano_editor(const char* filename, char* video, int* cursor) {
             }
         }
         int cur_pos = edit_start + cur_row * 80 + cur_col;
+        if (cur_pos >= 80*25) cur_pos = 80*25 - 1;
         *cursor = cur_pos;
         set_cursor_position(*cursor);
     }
@@ -179,7 +183,9 @@ void nano_editor(const char* filename, char* video, int* cursor) {
     volatile int drain_count = 0;
     while (drain_count < 100) {
         unsigned char dummy;
-        asm volatile("inb $0x60, %0" : "=a"(dummy));
+        if (!keyboard_pop_scancode(&dummy)) {
+            break;
+        }
         drain_count++;
         for (volatile int d = 0; d < 1000; d++);
     }
