@@ -96,14 +96,21 @@ void nano_editor(const char* filename, char* video, int* cursor) {
     if (pos < 0 || pos > MAX_FILE_CONTENT - 1) pos = 0;
     int editing = 1;
     int maxlen = MAX_FILE_CONTENT - 1;
+    if (pos > maxlen) {
+        print_string("Error: file too long, not saved", -1, video, cursor, COLOR_RED);
+        // Remove the file
+        node_table[node_idx].used = 0;
+        fs_save();
+        return;
+    }
     
     for (int i = 0; i < 80 * 25 * 2; i += 2) {
         video[i] = ' ';
         video[i + 1] = 0x07;
     }
     int header_cursor = 0;
-    print_string("--- Nano Editor ---", -1, video, &header_cursor, 0x0B);
-    print_string("Ctrl+S: Save | Ctrl+Q: Quit", -1, video, &header_cursor, 0x0F);
+    print_string("--- Smiggles Editor ---", -1, video, &header_cursor, COLOR_BROWN);
+    print_string("Ctrl+S: Save | Ctrl+Q: Quit", -1, video, &header_cursor, COLOR_LIGHT_GRAY);
     int edit_start = 240;
     int logical_row = 0, logical_col = 0;
     int draw_cursor = edit_start;
@@ -165,7 +172,20 @@ void nano_editor(const char* filename, char* video, int* cursor) {
         if (scancode == 0x1D) { ctrl = 1; continue; }
         if (ctrl && scancode == 0x1F) { // Ctrl+S: Save
             if (pos < 0) pos = 0;
-            if (pos > MAX_FILE_CONTENT - 1) pos = MAX_FILE_CONTENT - 1;
+            if (pos > maxlen) {
+                print_string("Error: file too long, not saved", -1, video, cursor, COLOR_RED);
+                node_table[node_idx].used = 0;
+                fs_save();
+                while (1) {
+                    unsigned char sc;
+                    if (!keyboard_pop_scancode(&sc)) {
+                        continue;
+                    }
+                    if (sc == 0x9D) break;
+                }
+                exit_code = 2;
+                break;
+            }
             buf[pos] = 0;
             node_table[node_idx].content_size = pos;
             fs_save();

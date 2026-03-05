@@ -461,7 +461,21 @@ int fs_touch(const char* path, const char* content) {
         int child_idx = node_table[parent_idx].children_idx[i];
         if (str_equal(node_table[child_idx].name, filename)) {
             if (node_table[child_idx].type == NODE_FILE) {
-                return child_idx; // File exists, return its index
+                // Overwrite file content and update content_size
+                if (content) {
+                    int len = 0;
+                    while (content[len] && len < MAX_FILE_CONTENT - 1) {
+                        node_table[child_idx].content[len] = content[len];
+                        len++;
+                    }
+                    node_table[child_idx].content[len] = 0;
+                    node_table[child_idx].content_size = len;
+                } else {
+                    node_table[child_idx].content[0] = 0;
+                    node_table[child_idx].content_size = 0;
+                }
+                fs_save();
+                return child_idx;
             }
             return -2;
         }

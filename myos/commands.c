@@ -1,4 +1,24 @@
+// ...existing code...
 #include "kernel.h"
+
+static void handle_filesize_command(const char* filename, char* video, int* cursor) {
+    int node_idx = resolve_path(filename);
+    if (node_idx == -1) {
+        print_string("File not found", 14, video, cursor, COLOR_RED);
+        return;
+    }
+    if (node_table[node_idx].type != NODE_FILE) {
+        print_string("Not a file", 10, video, cursor, COLOR_RED);
+        return;
+    }
+    char buf[64];
+    str_copy(buf, "Size: ", 64);
+    char temp[16];
+    int_to_str(node_table[node_idx].content_size, temp);
+    str_concat(buf, temp);
+    str_concat(buf, " bytes");
+    print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
+}
 
 // --- Global Variables ---
 char history[10][64];
@@ -152,19 +172,19 @@ static void handle_neofetch_command(char* video, int* cursor) {
         if (i < info_lines && info[i][0] != '\0') {
             const char* line = info[i];
             if (str_equal(line, "__COLORBAR__")) {
-                // Print colored blocks using visible character (ASCII 219: '█')
-                print_string_sameline("\xDB\xDB\xDB", 3, video, cursor, 0x04); // red
-                print_string_sameline("\xDB\xDB\xDB", 3, video, cursor, 0x02); // green
-                print_string_sameline("\xDB\xDB\xDB", 3, video, cursor, 0x0E); // yellow
-                print_string_sameline("\xDB\xDB\xDB", 3, video, cursor, 0x01); // blue
-                print_string_sameline("\xDB\xDB\xDB", 3, video, cursor, 0x05); // magenta
-                print_string_sameline("\xDB\xDB\xDB", 3, video, cursor, 0x03); // cyan
-                print_string_sameline("\xDB\xDB\xDB", 3, video, cursor, 0x07); // white
+                //colored block with ascii 219 █)
+                print_string_sameline("\xDB\xDB\xDB", 3, video, cursor, COLOR_RED); // red
+                print_string_sameline("\xDB\xDB\xDB", 3, video, cursor, COLOR_GREEN); // green
+                print_string_sameline("\xDB\xDB\xDB", 3, video, cursor, COLOR_YELLOW); // yellow
+                print_string_sameline("\xDB\xDB\xDB", 3, video, cursor, COLOR_BLUE); // blue
+                print_string_sameline("\xDB\xDB\xDB", 3, video, cursor, COLOR_MAGENTA); // magenta
+                print_string_sameline("\xDB\xDB\xDB", 3, video, cursor, COLOR_CYAN); // cyan
+                print_string_sameline("\xDB\xDB\xDB", 3, video, cursor, COLOR_WHITE); // white
             } else if (str_equal(line, "Uptime:")) {
                 // Print label (green)
-                print_string_sameline("Uptime:", -1, video, cursor, 0x0A);
-                print_string_sameline(" ", 1, video, cursor, 0x0F);
-                print_string_sameline(info[i+1], -1, video, cursor, 0x0F);
+                print_string_sameline("Uptime:", -1, video, cursor, COLOR_GREEN);
+                print_string_sameline(" ", 1, video, cursor, COLOR_WHITE);
+                print_string_sameline(info[i+1], -1, video, cursor, COLOR_WHITE);
                 i++; // skip value line
             } else {
                 // Find colon
@@ -178,42 +198,19 @@ static void handle_neofetch_command(char* video, int* cursor) {
                     int l = 0;
                     for (; l <= colon && l < 23; l++) label[l] = line[l];
                     label[l] = 0;
-                    print_string_sameline(label, -1, video, cursor, 0x0A); // green
+                    print_string_sameline(label, -1, video, cursor, COLOR_GREEN); // green
                     // Print value (white)
-                    print_string_sameline(" ", 1, video, cursor, 0x0F);
-                    print_string_sameline(line+colon+1, -1, video, cursor, 0x0F); // white
+                    print_string_sameline(" ", 1, video, cursor, COLOR_WHITE);
+                    print_string_sameline(line+colon+1, -1, video, cursor, COLOR_WHITE); // white
                 } else {
                     // No colon, print whole line in white
-                    print_string_sameline(line, -1, video, cursor, 0x0F);
+                    print_string_sameline(line, -1, video, cursor, COLOR_WHITE);
                 }
             }
         }
     }
 
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -230,21 +227,18 @@ static void handle_command(const char* cmd, char* video, int* cursor, const char
 
 static void handle_ls_command(char* video, int* cursor, unsigned char color_unused) {
     FSNode* dir = &node_table[current_dir_idx];
-    
     if (dir->child_count == 0) {
-        print_string("(empty)", 7, video, cursor, 0xB);
+        print_string("(empty)", 7, video, cursor, COLOR_LIGHT_GRAY);
         return;
     }
-    
     for (int i = 0; i < dir->child_count; i++) {
         int child_idx = dir->children_idx[i];
         FSNode* child = &node_table[child_idx];
-        
         if (child->type == NODE_DIRECTORY) {
-            print_string(child->name, -1, video, cursor, 0xB);
-            print_string_sameline("/", 1, video, cursor, 0xB);
+            print_string(child->name, -1, video, cursor, COLOR_LIGHT_CYAN);
+            print_string_sameline("/", 1, video, cursor, COLOR_LIGHT_CYAN);
         } else {
-            print_string(child->name, -1, video, cursor, 0x0F);
+            print_string(child->name, -1, video, cursor, COLOR_LIGHT_CYAN);
         }
     }
 }
@@ -264,28 +258,27 @@ static void handle_lsall_command(char* video, int* cursor) {
         buf[n++] = '[';
         buf[n++] = dir_table[i].used ? 'U' : 'u';
         buf[n++] = ',';
-        // parent as signed int
         int p = dir_table[i].parent;
         if (p < 0) { buf[n++] = '-'; p = -p; }
         if (p >= 10) buf[n++] = '0' + (p / 10);
         buf[n++] = '0' + (p % 10);
         buf[n++] = ']';
         buf[n++] = 0;
-        print_string(buf, -1, video, cursor, 0xE);
+        print_string(buf, -1, video, cursor, COLOR_CYAN);
     }
 }
 
 static void handle_cat_command(const char* filename, char* video, int* cursor, unsigned char color_unused) {
     int node_idx = resolve_path(filename);
     if (node_idx == -1) {
-        print_string("File not found", 14, video, cursor, 0xC);
+        print_string("File not found", 14, video, cursor, COLOR_RED);
         return;
     }
     if (node_table[node_idx].type != NODE_FILE) {
-        print_string("Not a file", 10, video, cursor, 0xC);
+        print_string("Not a file", 10, video, cursor, COLOR_RED);
         return;
     }
-    print_string(node_table[node_idx].content, node_table[node_idx].content_size, video, cursor, 0xB);
+    print_string(node_table[node_idx].content, node_table[node_idx].content_size, video, cursor, COLOR_LIGHT_GRAY);
 }
 
 static void handle_echo_command(const char* text, const char* filename, char* video, int* cursor, unsigned char color_unused) {
@@ -302,20 +295,20 @@ static void handle_echo_command(const char* text, const char* filename, char* vi
         node_table[node_idx].content[len] = 0;
         node_table[node_idx].content_size = len;
         fs_save();
-        print_string("OK", 2, video, cursor, 0xA);
+        print_string("OK", 2, video, cursor, COLOR_LIGHT_GREEN);
     } else {
-        print_string("Cannot write file", 17, video, cursor, 0xC);
+        print_string("Cannot write file", 17, video, cursor, COLOR_RED);
     }
 }
 
 static void handle_rm_command(const char* filename, char* video, int* cursor, unsigned char color_unused) {
     int result = fs_rm(filename, 0);
     if (result == -1) {
-        print_string("File not found or cannot remove root", 37, video, cursor, 0xC);
+        print_string("File not found or cannot remove root", 37, video, cursor, COLOR_RED);
     } else if (result == -2) {
-        print_string("Directory not empty. Use rmdir -r", 33, video, cursor, 0xC);
+        print_string("Directory not empty. Use rmdir -r", 33, video, cursor, COLOR_RED);
     } else {
-        print_string("Removed", 7, video, cursor, 0xA);
+        print_string("Removed", 7, video, cursor, COLOR_LIGHT_GREEN);
     }
 }
 
@@ -337,71 +330,66 @@ void handle_clear_command(char* video, int* cursor) {
 static void handle_mv_command(const char* oldname, const char* newname, char* video, int* cursor) {
     int src_idx = resolve_path(oldname);
     if (src_idx == -1) {
-        print_string("Source not found", 16, video, cursor, 0xC);
+        print_string("Source not found", 16, video, cursor, COLOR_RED);
         return;
     }
-    
     // Simple rename in same directory
     str_copy(node_table[src_idx].name, newname, MAX_NAME_LENGTH);
-    print_string("Renamed", 7, video, cursor, 0xA);
+    fs_save();
+    print_string("Renamed", 7, video, cursor, COLOR_LIGHT_GREEN);
 }
 
 static void handle_mkdir_command(const char* dirname, char* video, int* cursor, unsigned char color_unused) {
     int result = fs_mkdir(dirname);
     if (result == -1) {
-        print_string("Parent directory not found", 26, video, cursor, 0xC);
+        print_string("Parent directory not found", 26, video, cursor, COLOR_RED);
     } else if (result == -2) {
-        print_string("Directory already exists", 24, video, cursor, 0xC);
+        print_string("Directory already exists", 24, video, cursor, COLOR_RED);
     } else if (result == -3) {
-        print_string("No space for new directory", 26, video, cursor, 0xC);
+        print_string("No space for new directory", 26, video, cursor, COLOR_RED);
     } else {
-        print_string("Directory created", 17, video, cursor, 0xA);
+        print_string("Directory created", 17, video, cursor, COLOR_LIGHT_GREEN);
     }
 }
 
 static void handle_cd_command(const char* dirname, char* video, int* cursor, unsigned char color_unused) {
     if (str_equal(dirname, "")) {
         current_dir_idx = 0; // cd to root
-        print_string("Changed to /", 12, video, cursor, 0xA);
+        print_string("Changed to /", 12, video, cursor, COLOR_LIGHT_GREEN);
         return;
     }
-    
     int target_idx = resolve_path(dirname);
     if (target_idx == -1) {
-        print_string("Directory not found", 19, video, cursor, 0xC);
+        print_string("Directory not found", 19, video, cursor, COLOR_RED);
         return;
     }
-    
     if (node_table[target_idx].type != NODE_DIRECTORY) {
-        print_string("Not a directory", 15, video, cursor, 0xC);
+        print_string("Not a directory", 15, video, cursor, COLOR_RED);
         return;
     }
-    
     current_dir_idx = target_idx;
     char path[MAX_PATH_LENGTH];
     get_full_path(current_dir_idx, path, MAX_PATH_LENGTH);
-    print_string("Changed to: ", -1, video, cursor, 0xA);
-    print_string_sameline(path, -1, video, cursor, 0xA);
+    print_string("Changed to: ", -1, video, cursor, COLOR_LIGHT_GREEN);
+    print_string_sameline(path, -1, video, cursor, COLOR_LIGHT_GREEN);
 }
 
 static void handle_rmdir_command(const char* dirname, char* video, int* cursor) {
     int is_recursive = 0;
     const char* path = dirname;
-    
     // Check for -r flag
     if (dirname[0] == '-' && dirname[1] == 'r' && dirname[2] == ' ') {
         is_recursive = 1;
         path = dirname + 3;
         while (*path == ' ') path++;
     }
-    
     int result = fs_rm(path, is_recursive);
     if (result == -1) {
-        print_string("Directory not found", 19, video, cursor, 0xC);
+        print_string("Directory not found", 19, video, cursor, COLOR_RED);
     } else if (result == -2) {
-        print_string("Directory not empty. Use -r flag", 32, video, cursor, 0xC);
+        print_string("Directory not empty. Use -r flag", 32, video, cursor, COLOR_RED);
     } else {
-        print_string("Directory removed", 17, video, cursor, 0xA);
+        print_string("Directory removed", 17, video, cursor, COLOR_LIGHT_GREEN);
     }
 }
 
@@ -433,7 +421,7 @@ static void handle_free_command(char* video, int* cursor) {
     str_concat(buf, "/");
     int_to_str(MAX_NODES, temp);
     str_concat(buf, temp);
-    print_string(buf, -1, video, cursor, 0xB);
+    print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
 }
 
 static void handle_df_command(char* video, int* cursor) {
@@ -449,7 +437,7 @@ static void handle_df_command(char* video, int* cursor) {
     str_concat(buf, "/");
     int_to_str(MAX_NODES, temp);
     str_concat(buf, temp);
-    print_string(buf, -1, video, cursor, 0xB);
+    print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
 }
 
 static void handle_fscheck_command(char* video, int* cursor) {
@@ -464,7 +452,7 @@ static void handle_fscheck_command(char* video, int* cursor) {
     str_concat(buf, "FS active gen: ");
     int_to_str((int)active_generation, temp);
     str_concat(buf, temp);
-    print_string(buf, -1, video, cursor, 0xB);
+    print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
 
     buf[0] = 0;
     str_concat(buf, "Slot0: ");
@@ -475,7 +463,7 @@ static void handle_fscheck_command(char* video, int* cursor) {
 }
 
 static void handle_ver_command(char* video, int* cursor) {
-    print_string("Smiggles OS v1.0.0\nDeveloped by Jules Miller and Vajra Vanukuri", -1, video, cursor, 0xD);
+    print_string("Smiggles OS v1.0.0\nDeveloped by Jules Miller and Vajra Vanukuri", -1, video, cursor, COLOR_LIGHT_GRAY);
 }
 
 static void handle_uptime_command(char* video, int* cursor) {
@@ -484,12 +472,12 @@ static void handle_uptime_command(char* video, int* cursor) {
     int_to_str(ticks / 18, temp);
     str_concat(buf, temp);
     str_concat(buf, " seconds");
-    print_string(buf, -1, video, cursor, 0xB);
+    print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
 }
 
 static void handle_halt_command(char* video, int* cursor) {
     handle_clear_command(video, cursor);
-    print_string("Shutting down...", 15, video, cursor, 0xC);
+    print_string("Shutting down...", 15, video, cursor, COLOR_RED);
     // Shutdown for QEMU
     asm volatile("outw %0, %1" : : "a"((unsigned short)0x2000), "Nd"((unsigned short)0x604));
     while (1) {}
@@ -510,36 +498,34 @@ static void byte_to_hex(unsigned char byte, char* buf) {
 static void handle_hexdump_command(const char* filename, char* video, int* cursor) {
     int node_idx = resolve_path(filename);
     if (node_idx == -1 || node_table[node_idx].type != NODE_FILE) {
-        print_string("File not found", 14, video, cursor, 0xC);
+        print_string("File not found", 14, video, cursor, COLOR_RED);
         return;
     }
     char buf[4];
     for (int i = 0; i < node_table[node_idx].content_size; i++) {
         byte_to_hex((unsigned char)node_table[node_idx].content[i], buf);
-        print_string(buf, -1, video, cursor, 0xB);
+        print_string(buf, -1, video, cursor, COLOR_CYAN);
     }
 }
 
 static void handle_history_command(char* video, int* cursor) {
     for (int i = 0; i < history_count; i++) {
-        print_string(history[i], -1, video, cursor, 0xB);
+        print_string(history[i], -1, video, cursor, COLOR_LIGHT_GRAY);
     }
 }
 
 static void handle_pwd_command(char* video, int* cursor) {
     char path[MAX_PATH_LENGTH];
     get_full_path(current_dir_idx, path, MAX_PATH_LENGTH);
-    print_string(path, -1, video, cursor, 0xB);
+    print_string(path, -1, video, cursor, COLOR_CYAN);
 }
 
 static void handle_touch_command(const char* filename, char* video, int* cursor) {
     while (*filename == ' ') filename++;
-
     if (*filename == 0) {
-        print_string("Usage: touch <filename>", 23, video, cursor, 0xC);
+        print_string("Usage: touch <filename>", 23, video, cursor, COLOR_RED);
         return;
     }
-
     char clean_name[MAX_PATH_LENGTH];
     int n = 0;
     while (filename[n] && n < MAX_PATH_LENGTH - 1) {
@@ -548,17 +534,15 @@ static void handle_touch_command(const char* filename, char* video, int* cursor)
     }
     while (n > 0 && clean_name[n - 1] == ' ') n--;
     clean_name[n] = 0;
-
     if (clean_name[0] == 0) {
-        print_string("Usage: touch <filename>", 23, video, cursor, 0xC);
+        print_string("Usage: touch <filename>", 23, video, cursor, COLOR_RED);
         return;
     }
-
     int result = fs_touch(clean_name, "");
     if (result < 0) {
-        print_string("Cannot create file", 18, video, cursor, 0xC);
+        print_string("Cannot create file", 18, video, cursor, COLOR_RED);
     } else {
-        print_string("File created", 12, video, cursor, 0xA);
+        print_string("File created", 12, video, cursor, COLOR_LIGHT_GREEN);
     }
 }
 
@@ -737,6 +721,8 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
         handle_cd_command("", video, cursor, 0x0B);
     } else if (mini_strcmp(cmd, "ls") == 0) {
         handle_ls_command(video, cursor, 0x0B);
+    } else if (cmd[0] == 'f' && cmd[1] == 'i' && cmd[2] == 'l' && cmd[3] == 'e' && cmd[4] == 's' && cmd[5] == 'i' && cmd[6] == 'z' && cmd[7] == 'e' && cmd[8] == ' ') {
+        handle_filesize_command(cmd + 9, video, cursor);
     } else if (cmd[0] == 'm' && cmd[1] == 'k' && cmd[2] == 'd' && cmd[3] == 'i' && cmd[4] == 'r' && cmd[5] == ' ') {
         handle_mkdir_command(cmd + 6, video, cursor, 0x0B);
     } else if (cmd[0] == 't' && cmd[1] == 'o' && cmd[2] == 'u' && cmd[3] == 'c' && cmd[4] == 'h' && cmd[5] == ' ') {
@@ -796,12 +782,11 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
         filename[fn] = 0;
         handle_echo_command(text, filename, video, cursor, 0x0A);
     } else if (mini_strcmp(cmd, "ping") == 0) {
-        handle_command(cmd, video, cursor, "ping", "pong", 0xA);
+        handle_command(cmd, video, cursor, "ping", "pong", COLOR_LIGHT_GREEN);
     } else if (mini_strcmp(cmd, "about") == 0) {
-        handle_command(cmd, video, cursor, "about", "Smiggles v1.0.0 is an operating system that is lightweight, easy to use, and\ndesigned for the normal user and the skilled web developer.", 0xD);
+        handle_command(cmd, video, cursor, "about", "Smiggles OS is a lightweight operating system designed by Jules Miller and Vajra Vanukuri.", COLOR_LIGHT_GRAY);
     } else if (mini_strcmp(cmd, "help") == 0) {
         handle_command(cmd, video, cursor, "help",
-
             "touch file.txt - create file\n"
             "mkdir <path> - create directory\n"
             "rmdir <path> - remove directory\n"
@@ -822,7 +807,7 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
             "uptime - system uptime\n"
             "halt - shutdown\n"
             "reboot - restart\n",
-            0xA);
+            COLOR_LIGHT_GRAY);
 
     } else if (is_math_expr(cmd)) {
         handle_calc_command(cmd, video, cursor);
