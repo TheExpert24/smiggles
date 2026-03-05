@@ -41,6 +41,10 @@ void print_smiggles_art(char* video, int* cursor) {
 //print a string on NEW LINE with color
 void print_string(const char* str, int len, char* video, int* cursor, unsigned char color) {
     *cursor = ((*cursor / 80) + 1) * 80; //this is what goes to the new line
+    while (*cursor >= 80*25) {
+        scroll_screen(video);
+        *cursor -= 80;
+    }
     // If len < 0, auto-calculate string length
     if (len < 0) {
         len = 0;
@@ -50,7 +54,7 @@ void print_string(const char* str, int len, char* video, int* cursor, unsigned c
         // Handle "\\n" (two-character sequence)
         if (str[i] == '\\' && (i+1 < len) && str[i+1] == 'n') {
             *cursor = ((*cursor / 80) + 1) * 80;
-            if (*cursor >= 80*25) {
+            while (*cursor >= 80*25) {
                 scroll_screen(video);
                 *cursor -= 80;
             }
@@ -60,14 +64,14 @@ void print_string(const char* str, int len, char* video, int* cursor, unsigned c
         // Handle actual newline character (char 10)
         if (str[i] == '\n' || str[i] == 10) {
             *cursor = ((*cursor / 80) + 1) * 80;
-            if (*cursor >= 80*25) {
+            while (*cursor >= 80*25) {
                 scroll_screen(video);
                 *cursor -= 80;
             }
             i++;
             continue;
         }
-        if (*cursor >= 80*25) {
+        while (*cursor >= 80*25) {
             scroll_screen(video);
             *cursor -= 80;
         }
@@ -89,16 +93,24 @@ void print_string_sameline(const char* str, int len, char* video, int* cursor, u
         // Handle "\\n" (two-character sequence)
         if (str[i] == '\\' && (i+1 < len) && str[i+1] == 'n') {
             *cursor = ((*cursor / 80) + 1) * 80;
+            while (*cursor >= 80*25) {
+                scroll_screen(video);
+                *cursor -= 80;
+            }
             i += 2;
             continue;
         }
         // Handle actual newline character (char 10)
         if (str[i] == '\n' || str[i] == 10) {
             *cursor = ((*cursor / 80) + 1) * 80;
+            while (*cursor >= 80*25) {
+                scroll_screen(video);
+                *cursor -= 80;
+            }
             i++;
             continue;
         }
-        if (*cursor >= 80*25) {
+        while (*cursor >= 80*25) {
             scroll_screen(video);
             *cursor -= 80;
         }

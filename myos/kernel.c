@@ -329,7 +329,7 @@ void kernel_main(void) {
                 }
                 // New prompt
                 cursor = ((cursor / 80) + 1) * 80;
-                if (cursor >= 80*25) {
+                while (cursor >= 80*25) {
                     scroll_screen(video);
                     cursor -= 80;
                 }

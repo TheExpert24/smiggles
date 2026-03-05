@@ -17,12 +17,32 @@ static void handle_filesize_command(const char* filename, char* video, int* curs
     int_to_str(node_table[node_idx].content_size, temp);
     str_concat(buf, temp);
     str_concat(buf, " bytes");
-    print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
+    print_string(buf, -1, video, cursor, COLOR_LIGHT_CYAN);
 }
 
 // --- Global Variables ---
 char history[10][64];
 int history_count = 0;
+
+static void print_file_already_exists_message(int node_idx, char* video, int* cursor) {
+    char full_path[MAX_PATH_LENGTH];
+    char location[MAX_PATH_LENGTH];
+    char message[160];
+
+    get_full_path(node_idx, full_path, MAX_PATH_LENGTH);
+
+    int src = (full_path[0] == '/') ? 1 : 0;
+    int dst = 0;
+    while (full_path[src] && dst < MAX_PATH_LENGTH - 1) {
+        location[dst++] = full_path[src++];
+    }
+    location[dst] = 0;
+
+    message[0] = 0;
+    str_concat(message, "File already exists");
+
+    print_string(message, -1, video, cursor, COLOR_RED);
+}
 
 // --- Time Functions ---
 unsigned char cmos_read(unsigned char reg) {
@@ -228,7 +248,7 @@ static void handle_command(const char* cmd, char* video, int* cursor, const char
 static void handle_ls_command(char* video, int* cursor, unsigned char color_unused) {
     FSNode* dir = &node_table[current_dir_idx];
     if (dir->child_count == 0) {
-        print_string("(empty)", 7, video, cursor, COLOR_LIGHT_GRAY);
+        print_string("(empty)", 7, video, cursor, COLOR_LIGHT_CYAN);
         return;
     }
     for (int i = 0; i < dir->child_count; i++) {
@@ -238,7 +258,7 @@ static void handle_ls_command(char* video, int* cursor, unsigned char color_unus
             print_string(child->name, -1, video, cursor, COLOR_LIGHT_CYAN);
             print_string_sameline("/", 1, video, cursor, COLOR_LIGHT_CYAN);
         } else {
-            print_string(child->name, -1, video, cursor, COLOR_LIGHT_CYAN);
+            print_string(child->name, -1, video, cursor, COLOR_YELLOW);
         }
     }
 }
@@ -278,14 +298,25 @@ static void handle_cat_command(const char* filename, char* video, int* cursor, u
         print_string("Not a file", 10, video, cursor, COLOR_RED);
         return;
     }
-    print_string(node_table[node_idx].content, node_table[node_idx].content_size, video, cursor, COLOR_LIGHT_GRAY);
+    if (node_table[node_idx].content_size <= 0) {
+        print_string("File is empty", 13, video, cursor, COLOR_RED);
+        return;
+    }
+    print_string(node_table[node_idx].content, node_table[node_idx].content_size, video, cursor, COLOR_LIGHT_CYAN);
 }
 
 static void handle_echo_command(const char* text, const char* filename, char* video, int* cursor, unsigned char color_unused) {
     int node_idx = resolve_path(filename);
-    if (node_idx == -1) {
-        node_idx = fs_touch(filename, text);
+    if (node_idx != -1) {
+        if (node_table[node_idx].type == NODE_FILE) {
+            print_file_already_exists_message(node_idx, video, cursor);
+        } else {
+            print_string("Cannot write file", 17, video, cursor, COLOR_RED);
+        }
+        return;
     }
+
+    node_idx = fs_touch(filename, text);
     if (node_idx >= 0 && node_table[node_idx].type == NODE_FILE) {
         int len = 0;
         while (text[len] && len < MAX_FILE_CONTENT - 1) {
@@ -538,6 +569,13 @@ static void handle_touch_command(const char* filename, char* video, int* cursor)
         print_string("Usage: touch <filename>", 23, video, cursor, COLOR_RED);
         return;
     }
+
+    int existing_idx = resolve_path(clean_name);
+    if (existing_idx != -1 && node_table[existing_idx].type == NODE_FILE) {
+        print_file_already_exists_message(existing_idx, video, cursor);
+        return;
+    }
+
     int result = fs_touch(clean_name, "");
     if (result < 0) {
         print_string("Cannot create file", 18, video, cursor, COLOR_RED);
@@ -806,8 +844,10 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
             "ver - version info\n"
             "uptime - system uptime\n"
             "halt - shutdown\n"
-            "reboot - restart\n",
-            COLOR_LIGHT_GRAY);
+            "reboot - restart\n"
+            "neofetch - system info\n"
+            "filesize <filename> - shows size of file\n",
+            COLOR_LIGHT_GREEN);
 
     } else if (is_math_expr(cmd)) {
         handle_calc_command(cmd, video, cursor);
@@ -833,6 +873,8 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
         handle_halt_command(video, cursor);
     } else if (mini_strcmp(cmd, "reboot") == 0) {
         handle_reboot_command();
+    } else if (mini_strcmp(cmd,"filesize")==0){
+        handle_filesize_command(cmd + 9, video, cursor);
     } else if (cmd[0] == 'g' && cmd[1] == 'r' && cmd[2] == 'e' && cmd[3] == 'p' && cmd[4] == ' ') {
         handle_grep_command(cmd + 5, video, cursor);
     } else if (cmd[0] == 'h' && cmd[1] == 'e' && cmd[2] == 'x' && cmd[3] == 'd' && cmd[4] == 'u' && cmd[5] == 'm' && cmd[6] == 'p') {
@@ -860,7 +902,7 @@ void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* v
     const char* commands[] = {
         "ls", "cd", "pwd", "cat", "mkdir", "rmdir", "rm", "touch", "cp", "mv",
         "echo", "edit", "tree", "grep", "clear", "cls", "help", "time", "ping",
-        "about", "ver", "halt", "reboot", "history", "df", "fscheck", "free", "uptime"
+        "about", "ver", "halt", "reboot", "history", "df", "fscheck", "free", "uptime","filesize","neofetch"
     };
     int cmd_count = 28;
     
@@ -962,7 +1004,7 @@ void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* v
         
         // Reprint prompt and first match (no extra line needed)
         *cursor = ((*cursor / 80) + 1) * 80;
-        if (*cursor >= 80*25) {
+        while (*cursor >= 80*25) {
             scroll_screen(video);
             *cursor -= 80;
         }
