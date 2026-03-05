@@ -702,7 +702,7 @@ static void handle_grep_command(const char* args, char* video, int* cursor) {
     }
     
     if (!match_found) {
-        print_string("No matches found", 16, video, cursor, 0x08);
+        print_string("No matches found", 16, video, cursor, COLOR_RED);
     }
 }
 
