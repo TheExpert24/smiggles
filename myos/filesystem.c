@@ -555,7 +555,18 @@ int fs_rm(const char* path, int recursive) {
         }
     }
     
+    // Clear file content and size for safety
+    if (node_table[node_idx].type == NODE_FILE) {
+        node_table[node_idx].content[0] = 0;
+        node_table[node_idx].content_size = 0;
+    }
     node_table[node_idx].used = 0;
+    // Recalculate node_count (highest used index + 1)
+    int max_used = -1;
+    for (int i = 0; i < MAX_NODES; i++) {
+        if (node_table[i].used && i > max_used) max_used = i;
+    }
+    node_count = (max_used >= 0) ? (max_used + 1) : 0;
     fs_save();
     return 0;
 }
@@ -616,29 +627,27 @@ void fs_save() {
 
 void fs_load() {
     uint32_t best_generation = 0;
-    int found = 0;
-
+    int best_slot = -1;
     for (int slot = 0; slot < FS_SLOT_COUNT; slot++) {
         uint32_t gen = 0;
         if (fs_try_load_slot(slot, &gen)) {
-            if (!found || gen > best_generation) {
+            if (best_slot == -1 || gen > best_generation) {
                 best_generation = gen;
-                found = 1;
+                best_slot = slot;
             }
         }
     }
-
-    if (found) {
+    if (best_slot != -1) {
+        // Load the slot with the highest generation
+        fs_try_load_slot(best_slot, &best_generation);
         fsimage_to_globals();
         fs_active_generation = best_generation;
         return;
     }
-
     if (fs_load_legacy_single_image()) {
         fs_save();
         return;
     }
-
     fs_active_generation = 0;
 }
 

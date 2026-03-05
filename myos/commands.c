@@ -258,7 +258,7 @@ static void handle_ls_command(char* video, int* cursor, unsigned char color_unus
             print_string(child->name, -1, video, cursor, COLOR_LIGHT_CYAN);
             print_string_sameline("/", 1, video, cursor, COLOR_LIGHT_CYAN);
         } else {
-            print_string(child->name, -1, video, cursor, COLOR_YELLOW);
+            print_string(child->name, -1, video, cursor, COLOR_LIGHT_CYAN);
         }
     }
 }
@@ -302,7 +302,7 @@ static void handle_cat_command(const char* filename, char* video, int* cursor, u
         print_string("File is empty", 13, video, cursor, COLOR_RED);
         return;
     }
-    print_string(node_table[node_idx].content, node_table[node_idx].content_size, video, cursor, COLOR_LIGHT_CYAN);
+    print_string(node_table[node_idx].content, node_table[node_idx].content_size, video, cursor, COLOR_LIGHT_GRAY);
 }
 
 static void handle_echo_command(const char* text, const char* filename, char* video, int* cursor, unsigned char color_unused) {
@@ -847,7 +847,7 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
             "reboot - restart\n"
             "neofetch - system info\n"
             "filesize <filename> - shows size of file\n",
-            COLOR_LIGHT_GREEN);
+            COLOR_LIGHT_GRAY);
 
     } else if (is_math_expr(cmd)) {
         handle_calc_command(cmd, video, cursor);
