@@ -158,12 +158,18 @@ void free_page(void* addr);
 // Interrupts
 void pic_remap(void);
 void set_idt_entry(int n, unsigned int handler);
+void set_idt_entry_user(int n, unsigned int handler);
 void timer_handler(void);
 void keyboard_handler(void);
 int keyboard_pop_scancode(unsigned char* out_scancode);
 extern void load_idt(void*);
 extern void irq0_timer_handler();
 extern void irq1_keyboard_handler();
+extern void isr_syscall_handler();
+
+// Syscalls
+unsigned int syscall_dispatch(unsigned int number);
+unsigned int syscall_invoke(unsigned int number);
 
 // Filesystem
 void init_filesystem(void);

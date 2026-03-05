@@ -47,6 +47,7 @@ void kernel_main(void) {
     pic_remap();
     set_idt_entry(0x20, (unsigned int)irq0_timer_handler);
     set_idt_entry(0x21, (unsigned int)irq1_keyboard_handler);
+    set_idt_entry_user(0x80, (unsigned int)isr_syscall_handler);
     // Unmask IRQ0 (timer) and IRQ1 (keyboard)
     asm volatile("outb %0, %1" : : "a"((unsigned char)0xFC), "Nd"((uint16_t)PIC1_DATA));
     asm volatile("outb %0, %1" : : "a"((unsigned char)0xFF), "Nd"((uint16_t)PIC2_DATA));

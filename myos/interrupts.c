@@ -23,6 +23,14 @@ void set_idt_entry(int n, unsigned int handler) {
     idt[n].offset_high = (handler >> 16) & 0xFFFF;
 }
 
+void set_idt_entry_user(int n, unsigned int handler) {
+    idt[n].offset_low = handler & 0xFFFF;
+    idt[n].selector = 0x08;
+    idt[n].zero = 0;
+    idt[n].type_attr = 0xEE;
+    idt[n].offset_high = (handler >> 16) & 0xFFFF;
+}
+
 void pic_remap() {
     asm volatile("outb %0, %1" : : "a"((unsigned char)0x11), "Nd"((uint16_t)PIC1_COMMAND));
     asm volatile("outb %0, %1" : : "a"((unsigned char)0x11), "Nd"((uint16_t)PIC2_COMMAND));
@@ -37,6 +45,9 @@ void pic_remap() {
 // C handlers called from ASM stubs
 void timer_handler() {
     ticks++;
+    if ((ticks % 6) == 0) {
+        schedule();
+    }
     asm volatile("outb %0, %1" : : "a"((unsigned char)PIC_EOI), "Nd"((uint16_t)PIC1_COMMAND));
 }
 

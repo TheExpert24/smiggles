@@ -258,7 +258,7 @@ static void handle_ls_command(char* video, int* cursor, unsigned char color_unus
             print_string(child->name, -1, video, cursor, COLOR_LIGHT_CYAN);
             print_string_sameline("/", 1, video, cursor, COLOR_LIGHT_CYAN);
         } else {
-            print_string(child->name, -1, video, cursor, COLOR_LIGHT_CYAN);
+            print_string(child->name, -1, video, cursor, COLOR_YELLOW);
         }
     }
 }
@@ -302,7 +302,7 @@ static void handle_cat_command(const char* filename, char* video, int* cursor, u
         print_string("File is empty", 13, video, cursor, COLOR_RED);
         return;
     }
-    print_string(node_table[node_idx].content, node_table[node_idx].content_size, video, cursor, COLOR_LIGHT_GRAY);
+    print_string(node_table[node_idx].content, node_table[node_idx].content_size, video, cursor, COLOR_LIGHT_CYAN);
 }
 
 static void handle_echo_command(const char* text, const char* filename, char* video, int* cursor, unsigned char color_unused) {
@@ -503,6 +503,44 @@ static void handle_uptime_command(char* video, int* cursor) {
     int_to_str(ticks / 18, temp);
     str_concat(buf, temp);
     str_concat(buf, " seconds");
+    print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
+}
+
+static void handle_syscalltest_command(char* video, int* cursor) {
+    char buf[64];
+    char temp[16];
+
+    unsigned int before = syscall_invoke(1);
+    unsigned int pid = syscall_invoke(2);
+    unsigned int yield_ret = syscall_invoke(0);
+    unsigned int after = syscall_invoke(1);
+
+    buf[0] = 0;
+    str_concat(buf, "sys_get_ticks before: ");
+    int_to_str((int)before, temp);
+    str_concat(buf, temp);
+    print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
+
+    buf[0] = 0;
+    str_concat(buf, "sys_get_pid: ");
+    if (pid == 0xFFFFFFFFu) {
+        str_concat(buf, "none");
+    } else {
+        int_to_str((int)pid, temp);
+        str_concat(buf, temp);
+    }
+    print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
+
+    buf[0] = 0;
+    str_concat(buf, "sys_yield return: ");
+    int_to_str((int)yield_ret, temp);
+    str_concat(buf, temp);
+    print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
+
+    buf[0] = 0;
+    str_concat(buf, "sys_get_ticks after: ");
+    int_to_str((int)after, temp);
+    str_concat(buf, temp);
     print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
 }
 
@@ -843,11 +881,12 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
             "fscheck - fs slot health\n"
             "ver - version info\n"
             "uptime - system uptime\n"
+            "syscalltest - test int 0x80 path\n"
             "halt - shutdown\n"
             "reboot - restart\n"
             "neofetch - system info\n"
             "filesize <filename> - shows size of file\n",
-            COLOR_LIGHT_GRAY);
+            COLOR_LIGHT_GREEN);
 
     } else if (is_math_expr(cmd)) {
         handle_calc_command(cmd, video, cursor);
@@ -869,6 +908,8 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
         handle_ver_command(video, cursor);
     } else if (mini_strcmp(cmd, "uptime") == 0) {
         handle_uptime_command(video, cursor);
+    } else if (mini_strcmp(cmd, "syscalltest") == 0) {
+        handle_syscalltest_command(video, cursor);
     } else if (mini_strcmp(cmd, "halt") == 0) {
         handle_halt_command(video, cursor);
     } else if (mini_strcmp(cmd, "reboot") == 0) {
@@ -902,9 +943,9 @@ void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* v
     const char* commands[] = {
         "ls", "cd", "pwd", "cat", "mkdir", "rmdir", "rm", "touch", "cp", "mv",
         "echo", "edit", "tree", "grep", "clear", "cls", "help", "time", "ping",
-        "about", "ver", "halt", "reboot", "history", "df", "fscheck", "free", "uptime","filesize","neofetch"
+        "about", "ver", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "filesize", "neofetch", "syscalltest"
     };
-    int cmd_count = 28;
+    int cmd_count = (int)(sizeof(commands) / sizeof(commands[0]));
     
     // Find what we're trying to complete
     int word_start = *cmd_len;

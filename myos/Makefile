@@ -42,8 +42,11 @@ diskio.o: diskio.c
 ata.o: ata.c
 	$(CC) -ffreestanding -c ata.c -o ata.o
 
-kernel.bin: kernel_entry.o kernel.o interrupts.o memory.o filesystem.o display.o calculator.o editor.o commands.o diskio.o ata.o process.o
-	$(LD) -Ttext 0x10000 kernel_entry.o kernel.o interrupts.o memory.o filesystem.o display.o calculator.o editor.o commands.o diskio.o ata.o process.o -o kernel.bin --oformat binary
+syscall.o: syscall.c
+	$(CC) -ffreestanding -c syscall.c -o syscall.o
+
+kernel.bin: kernel_entry.o kernel.o interrupts.o memory.o filesystem.o display.o calculator.o editor.o commands.o diskio.o ata.o process.o syscall.o
+	$(LD) -Ttext 0x10000 kernel_entry.o kernel.o interrupts.o memory.o filesystem.o display.o calculator.o editor.o commands.o diskio.o ata.o process.o syscall.o -o kernel.bin --oformat binary
 process.o: process.c
 	$(CC) -ffreestanding -c process.c -o process.o
 

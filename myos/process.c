@@ -46,16 +46,20 @@ void context_switch(int from_pid, int to_pid) {
     // In a real OS, you would use inline assembly to save registers and stack pointer
     // Here, we just simulate by storing esp/eip (for demonstration)
     // TODO: Replace with real register save/restore
-    if (from_pid < 0 || from_pid >= MAX_PROCESSES) return;
     if (to_pid < 0 || to_pid >= MAX_PROCESSES) return;
-    PCB* from = &process_table[from_pid];
     PCB* to = &process_table[to_pid];
+    PCB* from = 0;
+    if (from_pid >= 0 && from_pid < MAX_PROCESSES) {
+        from = &process_table[from_pid];
+    }
     // Save current ESP/EIP (simulated)
     // from->esp = ...; from->eip = ...;
     // Restore next process ESP/EIP (simulated)
     // ... set CPU registers to to->esp, to->eip ...
     // Mark states
-    from->state = PROC_READY;
+    if (from && from->state == PROC_RUNNING) {
+        from->state = PROC_READY;
+    }
     to->state = PROC_RUNNING;
     current_process = to_pid;
     // In a real OS, you would jump to to->eip and set esp
@@ -76,6 +80,9 @@ void schedule(void) {
     }
     if (next != -1 && next != current_process) {
         context_switch(current_process, next);
+    } else if (next != -1 && current_process == -1) {
+        process_table[next].state = PROC_RUNNING;
+        current_process = next;
     }
 }
 
