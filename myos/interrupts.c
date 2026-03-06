@@ -27,7 +27,7 @@ void set_idt_entry_user(int n, unsigned int handler) {
     idt[n].offset_low = handler & 0xFFFF;
     idt[n].selector = 0x08;
     idt[n].zero = 0;
-    idt[n].type_attr = 0xEE;
+    idt[n].type_attr = 0xEF;
     idt[n].offset_high = (handler >> 16) & 0xFFFF;
 }
 
@@ -45,6 +45,8 @@ void pic_remap() {
 // C handlers called from ASM stubs
 void timer_handler() {
     ticks++;
+    process_run_current_tick();
+    process_maintenance_tick();
     if ((ticks % 6) == 0) {
         schedule();
     }

@@ -37,9 +37,11 @@ irq1_keyboard_handler:
 isr_syscall_handler:
     pusha
     mov eax, [esp + 28]
+    mov ebx, [esp + 16]
+    push ebx
     push eax
     call syscall_dispatch
-    add esp, 4
+    add esp, 8
     mov [esp + 28], eax
     popa
     iretd

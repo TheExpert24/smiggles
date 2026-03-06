@@ -34,6 +34,7 @@ char tab_matches[32][32];
 void kernel_main(void) {
     // Initialize basic paging and frame allocator (virtual memory foundation)
     init_paging();
+    init_protection();
     init_process_table();
 
     // Load filesystem image from disk and validate; if invalid, initialize a new one

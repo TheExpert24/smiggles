@@ -506,6 +506,165 @@ static void handle_uptime_command(char* video, int* cursor) {
     print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
 }
 
+static int parse_nonneg_int(const char* s, int* out) {
+    int value = 0;
+    int i = 0;
+    if (!s || !out) return 0;
+    while (s[i] == ' ') i++;
+    if (s[i] == 0) return 0;
+    while (s[i] && s[i] != ' ') {
+        if (s[i] < '0' || s[i] > '9') return 0;
+        value = value * 10 + (s[i] - '0');
+        i++;
+    }
+    while (s[i] == ' ') i++;
+    if (s[i] != 0) return 0;
+    *out = value;
+    return 1;
+}
+
+static void handle_spawn_command(const char* arg, char* video, int* cursor) {
+    while (*arg == ' ') arg++;
+
+    if (!(arg[0] == 'd' && arg[1] == 'e' && arg[2] == 'm' && arg[3] == 'o' && (arg[4] == 0 || arg[4] == ' '))) {
+        print_string("Usage: spawn demo [count|auto on|auto off]", -1, video, cursor, COLOR_RED);
+        return;
+    }
+
+    arg += 4;
+    while (*arg == ' ') arg++;
+
+    if (arg[0] == 0) {
+        int pid = process_spawn_demo();
+        if (pid < 0) {
+            print_string("Failed to spawn process", -1, video, cursor, COLOR_RED);
+            return;
+        }
+        schedule();
+        char buf[64];
+        char temp[16];
+        buf[0] = 0;
+        str_concat(buf, "Spawned demo process pid=");
+        int_to_str(pid, temp);
+        str_concat(buf, temp);
+        print_string(buf, -1, video, cursor, COLOR_LIGHT_GREEN);
+        return;
+    }
+
+    if (arg[0] == 'a' && arg[1] == 'u' && arg[2] == 't' && arg[3] == 'o' && arg[4] == ' ') {
+        const char* mode = arg + 5;
+        while (*mode == ' ') mode++;
+        if (mode[0] == 'o' && mode[1] == 'n' && mode[2] == 0) {
+            process_set_demo_autorespawn(1);
+            print_string("Demo auto-respawn: ON", -1, video, cursor, COLOR_LIGHT_GREEN);
+            return;
+        }
+        if (mode[0] == 'o' && mode[1] == 'f' && mode[2] == 'f' && mode[3] == 0) {
+            process_set_demo_autorespawn(0);
+            print_string("Demo auto-respawn: OFF", -1, video, cursor, COLOR_LIGHT_GREEN);
+            return;
+        }
+        print_string("Usage: spawn demo auto on|off", -1, video, cursor, COLOR_RED);
+        return;
+    }
+
+    int count = 0;
+    if (!parse_nonneg_int(arg, &count) || count <= 0) {
+        print_string("Usage: spawn demo [count|auto on|auto off]", -1, video, cursor, COLOR_RED);
+        return;
+    }
+
+    int spawned = 0;
+    for (int i = 0; i < count; i++) {
+        if (process_spawn_demo() >= 0) spawned++;
+        else break;
+    }
+
+    if (spawned > 0) schedule();
+
+    char buf[64];
+    char temp[16];
+    buf[0] = 0;
+    str_concat(buf, "Spawned demo processes: ");
+    int_to_str(spawned, temp);
+    str_concat(buf, temp);
+    str_concat(buf, "/");
+    int_to_str(count, temp);
+    str_concat(buf, temp);
+    print_string(buf, -1, video, cursor, spawned > 0 ? COLOR_LIGHT_GREEN : COLOR_RED);
+}
+
+static void handle_wait_command(const char* arg, char* video, int* cursor) {
+    int wait_ticks = 0;
+    if (!parse_nonneg_int(arg, &wait_ticks)) {
+        print_string("Usage: wait <ticks>", -1, video, cursor, COLOR_RED);
+        return;
+    }
+
+    unsigned int end_ticks = syscall_invoke1(3, (unsigned int)wait_ticks);
+
+    char buf[64];
+    char temp[16];
+    buf[0] = 0;
+    str_concat(buf, "Wait done at tick ");
+    int_to_str((int)end_ticks, temp);
+    str_concat(buf, temp);
+    print_string(buf, -1, video, cursor, COLOR_LIGHT_GREEN);
+}
+
+static void handle_ps_command(char* video, int* cursor) {
+    print_string("PID NAME   STATE    RUN   WORK", -1, video, cursor, COLOR_LIGHT_CYAN);
+
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        PCB* proc = &process_table[i];
+        if (proc->state == PROC_UNUSED) continue;
+
+        char line[96];
+        char temp[16];
+
+        line[0] = 0;
+        int_to_str(proc->pid, temp);
+        str_concat(line, temp);
+        str_concat(line, "   ");
+
+        if (proc->name[0]) str_concat(line, proc->name);
+        else str_concat(line, "-");
+        str_concat(line, "   ");
+
+        str_concat(line, process_state_name(proc->state));
+        str_concat(line, "   ");
+
+        int_to_str((int)proc->run_ticks, temp);
+        str_concat(line, temp);
+        str_concat(line, "   ");
+
+        int_to_str((int)proc->regs[0], temp);
+        str_concat(line, temp);
+
+        print_string(line, -1, video, cursor, COLOR_LIGHT_GRAY);
+    }
+}
+
+static void handle_kill_command(const char* arg, char* video, int* cursor) {
+    int pid = 0;
+    if (!parse_nonneg_int(arg, &pid)) {
+        print_string("Usage: kill <pid>", -1, video, cursor, COLOR_RED);
+        return;
+    }
+
+    int result = process_kill(pid);
+    if (result == -1) {
+        print_string("Invalid pid", -1, video, cursor, COLOR_RED);
+        return;
+    }
+    if (result == -2) {
+        print_string("Process slot is unused", -1, video, cursor, COLOR_RED);
+        return;
+    }
+
+    print_string("Process killed", -1, video, cursor, COLOR_LIGHT_GREEN);
+}
+
 static void handle_syscalltest_command(char* video, int* cursor) {
     char buf[64];
     char temp[16];
@@ -514,6 +673,7 @@ static void handle_syscalltest_command(char* video, int* cursor) {
     unsigned int pid = syscall_invoke(2);
     unsigned int yield_ret = syscall_invoke(0);
     unsigned int after = syscall_invoke(1);
+    unsigned int waited = syscall_invoke1(3, 2);
 
     buf[0] = 0;
     str_concat(buf, "sys_get_ticks before: ");
@@ -540,6 +700,12 @@ static void handle_syscalltest_command(char* video, int* cursor) {
     buf[0] = 0;
     str_concat(buf, "sys_get_ticks after: ");
     int_to_str((int)after, temp);
+    str_concat(buf, temp);
+    print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
+
+    buf[0] = 0;
+    str_concat(buf, "sys_wait_ticks(2) end: ");
+    int_to_str((int)waited, temp);
     str_concat(buf, temp);
     print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
 }
@@ -881,7 +1047,10 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
             "fscheck - fs slot health\n"
             "ver - version info\n"
             "uptime - system uptime\n"
-            "syscalltest - test int 0x80 path\n"
+            "spawn demo [count|auto on|auto off]\n"
+            "ps - list processes\n"
+            "kill <pid> - terminate process\n"
+            "wait <ticks> - syscall sleep/yield\n"
             "halt - shutdown\n"
             "reboot - restart\n"
             "neofetch - system info\n"
@@ -908,6 +1077,14 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
         handle_ver_command(video, cursor);
     } else if (mini_strcmp(cmd, "uptime") == 0) {
         handle_uptime_command(video, cursor);
+    } else if (cmd[0] == 's' && cmd[1] == 'p' && cmd[2] == 'a' && cmd[3] == 'w' && cmd[4] == 'n' && cmd[5] == ' ') {
+        handle_spawn_command(cmd + 6, video, cursor);
+    } else if (mini_strcmp(cmd, "ps") == 0) {
+        handle_ps_command(video, cursor);
+    } else if (cmd[0] == 'k' && cmd[1] == 'i' && cmd[2] == 'l' && cmd[3] == 'l' && cmd[4] == ' ') {
+        handle_kill_command(cmd + 5, video, cursor);
+    } else if (cmd[0] == 'w' && cmd[1] == 'a' && cmd[2] == 'i' && cmd[3] == 't' && cmd[4] == ' ') {
+        handle_wait_command(cmd + 5, video, cursor);
     } else if (mini_strcmp(cmd, "syscalltest") == 0) {
         handle_syscalltest_command(video, cursor);
     } else if (mini_strcmp(cmd, "halt") == 0) {
@@ -943,7 +1120,7 @@ void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* v
     const char* commands[] = {
         "ls", "cd", "pwd", "cat", "mkdir", "rmdir", "rm", "touch", "cp", "mv",
         "echo", "edit", "tree", "grep", "clear", "cls", "help", "time", "ping",
-        "about", "ver", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "filesize", "neofetch", "syscalltest"
+        "about", "ver", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "filesize", "neofetch", "syscalltest", "spawn", "ps", "kill", "wait"
     };
     int cmd_count = (int)(sizeof(commands) / sizeof(commands[0]));
     

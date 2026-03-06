@@ -50,10 +50,12 @@ typedef enum {
 typedef struct {
     int pid;
     ProcessState state;
+    char name[16];
     unsigned int esp;
     unsigned int eip;
     unsigned int stack_base;
     unsigned int stack_size;
+    unsigned int run_ticks;
     unsigned int regs[8];
 } PCB;
 
@@ -75,6 +77,28 @@ void process_exit(void);
 
 // Voluntarily yield CPU
 void process_yield(void);
+
+// Run currently scheduled process for one scheduler tick
+void process_run_current_tick(void);
+
+// Spawn a demo background process
+int process_spawn_demo(void);
+
+// Spawn demo process with custom work ticks (0 = unlimited)
+int process_spawn_demo_with_work(unsigned int work_ticks);
+
+// Kill process by pid
+int process_kill(int pid);
+
+// Enable/disable auto-respawn for demo process
+void process_set_demo_autorespawn(int enabled);
+int process_get_demo_autorespawn(void);
+
+// Periodic maintenance tasks for process subsystem
+void process_maintenance_tick(void);
+
+// Human-readable process state
+const char* process_state_name(ProcessState state);
 
 // --- Interrupt Definitions ---
 #define PIC1_COMMAND 0x20
@@ -155,6 +179,11 @@ void init_paging(void);
 void* alloc_page(void);
 void free_page(void* addr);
 
+// Protection (GDT/TSS/Ring setup)
+void init_protection(void);
+int protection_is_ready(void);
+unsigned int protection_get_cpl(void);
+
 // Interrupts
 void pic_remap(void);
 void set_idt_entry(int n, unsigned int handler);
@@ -168,8 +197,9 @@ extern void irq1_keyboard_handler();
 extern void isr_syscall_handler();
 
 // Syscalls
-unsigned int syscall_dispatch(unsigned int number);
+unsigned int syscall_dispatch(unsigned int number, unsigned int arg0);
 unsigned int syscall_invoke(unsigned int number);
+unsigned int syscall_invoke1(unsigned int number, unsigned int arg0);
 
 // Filesystem
 void init_filesystem(void);
