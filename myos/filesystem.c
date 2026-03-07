@@ -33,6 +33,8 @@ struct FSImage {
     RamDir dir_table[MAX_DIRS];
     int dir_count;
     int current_dir;
+    User user_table[MAX_USERS];
+    int user_count;
     } __attribute__((packed));
 
 typedef char fs_image_must_fit_in_reserved_sectors[
@@ -160,6 +162,10 @@ static void fsimage_to_globals() {
     my_memcpy(dir_table, fs_image.dir_table, sizeof(dir_table));
     dir_count = fs_image.dir_count;
     current_dir = fs_image.current_dir;
+    my_memcpy(user_table, fs_image.user_table, sizeof(user_table));
+    user_count = fs_image.user_count;
+    extern int current_user_idx;
+    current_user_idx = -1;
 }
 // Update fs_image from global variables
 static void globals_to_fsimage() {
@@ -171,6 +177,8 @@ static void globals_to_fsimage() {
     my_memcpy(fs_image.dir_table, dir_table, sizeof(dir_table));
     fs_image.dir_count = dir_count;
     fs_image.current_dir = current_dir;
+    my_memcpy(fs_image.user_table, user_table, sizeof(user_table));
+    fs_image.user_count = user_count;
 }
 
 // --- Global Variables ---
@@ -250,6 +258,17 @@ void init_filesystem() {
     node_table[0].name[1] = 0;
     node_count = 1;
     current_dir_idx = 0;
+
+    // Always initialize admin and user accounts
+    extern User user_table[MAX_USERS];
+    extern int user_count;
+    str_copy(user_table[0].username, "admin", 32);
+    str_copy(user_table[0].password, "admin", 32);
+    user_table[0].is_admin = 1;
+    str_copy(user_table[1].username, "user", 32);
+    str_copy(user_table[1].password, "password", 32);
+    user_table[1].is_admin = 0;
+    user_count = 2;
 }
 
 void get_full_path(int node_idx, char* path, int max_len) {

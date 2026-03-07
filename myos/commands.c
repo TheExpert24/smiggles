@@ -986,6 +986,97 @@ static void handle_cp_command(const char* args, char* video, int* cursor) {
 
 // --- Main Command Dispatcher ---
 void dispatch_command(const char* cmd, char* video, int* cursor) {
+                                // Debug command: dumpusers (prints all usernames and admin status)
+                                if (mini_strcmp(cmd, "dumpusers") == 0) {
+                                    extern User user_table[MAX_USERS];
+                                    extern int user_count;
+                                    char buf[64];
+                                    for (int i = 0; i < user_count; i++) {
+                                        int n = 0;
+                                        str_copy(buf+n, user_table[i].username, 32);
+                                        n += str_len(user_table[i].username);
+                                        str_copy(buf+n, " [", 3);
+                                        n += str_len(" [");
+                                        buf[n++] = user_table[i].is_admin ? 'A' : 'U';
+                                        buf[n++] = ']';
+                                        buf[n++] = 0;
+                                        print_string(buf, -1, video, cursor, COLOR_LIGHT_CYAN);
+                                    }
+                                    return;
+                                }
+                            // Admin-only: adduser
+                            if (mini_strcmp(cmd, "adduser") == 0) {
+                                extern int current_user_idx;
+                                extern User user_table[MAX_USERS];
+                                extern int user_count;
+                                extern void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cursor);
+                                if (current_user_idx < 0 || !user_table[current_user_idx].is_admin) {
+                                    print_string("Access denied: admin only.", -1, video, cursor, COLOR_LIGHT_RED);
+                                    return;
+                                }
+                                if (user_count >= MAX_USERS) {
+                                    print_string("User limit reached.", -1, video, cursor, COLOR_LIGHT_RED);
+                                    return;
+                                }
+                                char username[MAX_NAME_LENGTH];
+                                char password[MAX_NAME_LENGTH];
+                                shell_read_line("New username: ", username, MAX_NAME_LENGTH, video, cursor);
+                                // Check for duplicate username
+                                for (int i = 0; i < user_count; i++) {
+                                    if (mini_strcmp(username, user_table[i].username) == 0) {
+                                        print_string("Username exists.", -1, video, cursor, COLOR_LIGHT_RED);
+                                        return;
+                                    }
+                                }
+                                shell_read_line("New password: ", password, MAX_NAME_LENGTH, video, cursor);
+                                user_table[user_count].is_admin = 0;
+                                str_copy(user_table[user_count].username, username, MAX_NAME_LENGTH);
+                                str_copy(user_table[user_count].password, password, MAX_NAME_LENGTH);
+                                user_count++;
+                                extern void fs_save();
+                                fs_save();
+                                print_string("User added.", -1, video, cursor, COLOR_LIGHT_GREEN);
+                                return;
+                            }
+
+                            // Admin-only: deluser
+                            if (mini_strcmp(cmd, "deluser") == 0) {
+                                extern int current_user_idx;
+                                extern User user_table[MAX_USERS];
+                                extern int user_count;
+                                extern void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cursor);
+                                if (current_user_idx < 0 || !user_table[current_user_idx].is_admin) {
+                                    print_string("Access denied: admin only.", -1, video, cursor, COLOR_LIGHT_RED);
+                                    return;
+                                }
+                                char username[MAX_NAME_LENGTH];
+                                shell_read_line("Delete username: ", username, MAX_NAME_LENGTH, video, cursor);
+                                int idx = -1;
+                                int admin_count = 0;
+                                for (int i = 0; i < user_count; i++) {
+                                    if (user_table[i].is_admin) admin_count++;
+                                    if (mini_strcmp(username, user_table[i].username) == 0) idx = i;
+                                }
+                                if (idx == -1) {
+                                    print_string("User not found.", -1, video, cursor, COLOR_LIGHT_RED);
+                                    return;
+                                }
+                                if (idx == current_user_idx) {
+                                    print_string("Cannot delete current user.", -1, video, cursor, COLOR_LIGHT_RED);
+                                    return;
+                                }
+                                if (user_table[idx].is_admin && admin_count <= 1) {
+                                    print_string("Cannot delete last admin.", -1, video, cursor, COLOR_RED);
+                                    return;
+                                }
+                                // Shift users
+                                for (int i = idx; i < user_count-1; i++) user_table[i] = user_table[i+1];
+                                user_count--;
+                                extern void fs_save();
+                                fs_save();
+                                print_string("User deleted.", -1, video, cursor, COLOR_LIGHT_GREEN);
+                                return;
+                            }
                         // Admin-only command: listusers
                         if (mini_strcmp(cmd, "listusers") == 0) {
                             extern int current_user_idx;
@@ -1001,7 +1092,8 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
                             return;
                         }
                     extern int current_user_idx;
-                    // Restrict sensitive commands to logged-in users (for testing)
+                    //Restrict sensitive commands to logged-in users 
+                    //TODO: let regular 
                     if ((cmd[0] == 'r' && cmd[1] == 'm' && (cmd[2] == ' ' || (cmd[2] == 'd' && cmd[3] == 'i' && cmd[4] == 'r'))) || mini_strcmp(cmd, "useradd") == 0 || mini_strcmp(cmd, "userdel") == 0) {
                         if (current_user_idx < 0) {
                             print_string("Access denied: login required.", -1, video, cursor, COLOR_RED);

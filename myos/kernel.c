@@ -97,6 +97,8 @@ void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cur
 }
 
 void kernel_main(void) {
+        // Ensure no user is logged in at boot
+        current_user_idx = -1;
     // Initialize basic paging and frame allocator (virtual memory foundation)
     init_paging();
     init_protection();
