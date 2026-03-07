@@ -30,6 +30,71 @@ int tab_completion_active = 0;
 int tab_completion_position = -1;
 int tab_match_count = 0;
 char tab_matches[32][32];
+// --- User Authentication ---
+User user_table[MAX_USERS] = {
+    {"admin", "admin", 1},
+    {"user", "password", 0}
+};
+int user_count = 2;
+
+int current_user_idx = -1; // -1 means no user logged in
+
+// Reusable shell_read_line for login and prompts
+void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cursor) {
+    // Move cursor to new line for prompt
+    *cursor = ((*cursor / 80) + 1) * 80;
+    while (*cursor >= 80*25) {
+        scroll_screen(video);
+        *cursor -= 80;
+    }
+    int pi = 0;
+    while (prompt[pi] && *cursor < 80*25 - 1) {
+        video[(*cursor)*2] = prompt[pi];
+        video[(*cursor)*2+1] = 0x0F;
+        (*cursor)++;
+        pi++;
+    }
+    set_cursor_position(*cursor);
+    int line_start = *cursor;
+    int len = 0;
+    int cmd_cursor = 0;
+    int shift = 0;
+    while (1) {
+        unsigned char scancode;
+        if (!keyboard_pop_scancode(&scancode)) continue;
+        if (scancode == 0x2A || scancode == 0x36) { shift = 1; continue; }
+        if (scancode == 0xAA || scancode == 0xB6) { shift = 0; continue; }
+        if (scancode > 0x80) continue;
+        char c = scancode_to_char(scancode, shift);
+        if (!c) continue;
+        if (c == '\n') break;
+        if (c == 8 && cmd_cursor > 0 && len > 0 && *cursor > line_start) {
+            for (int k = cmd_cursor-1; k < len-1; k++) buf[k] = buf[k+1];
+            len--;
+            cmd_cursor--;
+            (*cursor)--;
+            int redraw = *cursor;
+            for (int k = 0; k < len-cmd_cursor; k++) {
+                video[(redraw+k)*2] = buf[cmd_cursor+k];
+                video[(redraw+k)*2+1] = 0x0F;
+            }
+            video[(line_start+len)*2] = ' ';
+            video[(line_start+len)*2+1] = 0x07;
+            set_cursor_position(*cursor);
+            continue;
+        }
+        if (c >= 32 && c <= 126 && len < max_len-1) {
+            buf[cmd_cursor] = c;
+            len++;
+            cmd_cursor++;
+            (*cursor)++;
+            video[(*cursor-1)*2] = c;
+            video[(*cursor-1)*2+1] = 0x0F;
+            set_cursor_position(*cursor);
+        }
+    }
+    buf[len] = 0;
+}
 
 void kernel_main(void) {
     // Initialize basic paging and frame allocator (virtual memory foundation)

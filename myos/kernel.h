@@ -29,6 +29,17 @@
 #define MAX_NAME_LENGTH 32
 #define MAX_CHILDREN 32
 #define MAX_NODES 32
+// --- User Authentication ---
+#define MAX_USERS 8
+typedef struct {
+     char username[MAX_NAME_LENGTH];
+     char password[MAX_NAME_LENGTH];
+     int is_admin;
+} User;
+
+extern User user_table[MAX_USERS];
+extern int user_count;
+extern int current_user_idx; // -1 means no user logged in
 #define MAX_FILE_CONTENT 2048
 #define MAX_FILE_NAME 32
 #define MAX_FILES 8

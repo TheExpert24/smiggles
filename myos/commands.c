@@ -1,5 +1,28 @@
 // ...existing code...
 #include "kernel.h"
+// Declare read_line function
+void read_line(char* buf, int max_len, char* video, int* cursor);
+// Declare get_key function
+char get_key(void);
+
+// Simple read_line implementation for login
+void read_line(char* buf, int max_len, char* video, int* cursor) {
+    int len = 0;
+    while (len < max_len - 1) {
+        char c = get_key(); // You may need to replace get_key with your actual key reading function
+        if (c == '\n' || c == '\r') break;
+        if (c == '\b' && len > 0) {
+            len--;
+            buf[len] = 0;
+            print_string("\b \b", 3, video, cursor, COLOR_LIGHT_CYAN);
+        } else if (c >= 32 && c <= 126) {
+            buf[len++] = c;
+            buf[len] = 0;
+            print_string(&c, 1, video, cursor, COLOR_LIGHT_CYAN);
+        }
+    }
+    buf[len] = 0;
+}
 
 static void handle_filesize_command(const char* filename, char* video, int* cursor) {
     int node_idx = resolve_path(filename);
@@ -23,6 +46,28 @@ static void handle_filesize_command(const char* filename, char* video, int* curs
 // --- Global Variables ---
 char history[10][64];
 int history_count = 0;
+
+// --- User Authentication ---
+void handle_login_command(char* video, int* cursor) {
+    extern User user_table[MAX_USERS];
+    extern int user_count;
+    extern int current_user_idx;
+
+    extern void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cursor);
+    char username[MAX_NAME_LENGTH];
+    char password[MAX_NAME_LENGTH];
+    shell_read_line("Username: ", username, MAX_NAME_LENGTH, video, cursor);
+    shell_read_line("Password: ", password, MAX_NAME_LENGTH, video, cursor);
+
+    for (int i = 0; i < user_count; i++) {
+        if (mini_strcmp(username, user_table[i].username) == 0 && mini_strcmp(password, user_table[i].password) == 0) {
+            current_user_idx = i;
+            print_string("Login successful!", -1, video, cursor, COLOR_LIGHT_GREEN);
+            return;
+        }
+    }
+    print_string("Login failed.", -1, video, cursor, COLOR_LIGHT_RED);
+}
 
 static void print_file_already_exists_message(int node_idx, char* video, int* cursor) {
     char full_path[MAX_PATH_LENGTH];
@@ -941,6 +986,26 @@ static void handle_cp_command(const char* args, char* video, int* cursor) {
 
 // --- Main Command Dispatcher ---
 void dispatch_command(const char* cmd, char* video, int* cursor) {
+                if (mini_strcmp(cmd, "logout") == 0) {
+                    extern int current_user_idx;
+                    current_user_idx = -1;
+                    print_string("Logged out.", -1, video, cursor, COLOR_LIGHT_GREEN);
+                    return;
+                }
+            if (mini_strcmp(cmd, "whoami") == 0) {
+                extern int current_user_idx;
+                extern User user_table[MAX_USERS];
+                if (current_user_idx >= 0) {
+                    print_string(user_table[current_user_idx].username, -1, video, cursor, COLOR_LIGHT_CYAN);
+                } else {
+                    print_string("guest", -1, video, cursor, COLOR_LIGHT_CYAN);
+                }
+                return;
+            }
+        if (mini_strcmp(cmd, "login") == 0) {
+            handle_login_command(video, cursor);
+            return;
+        }
     // nano-like editor: edit filename.txt
     if (cmd[0] == 'e' && cmd[1] == 'd' && cmd[2] == 'i' && cmd[3] == 't' && cmd[4] == ' ') {
         int start = 5;

@@ -122,6 +122,22 @@ void print_string_sameline(const char* str, int len, char* video, int* cursor, u
 }
 
 // --- Shared Keyboard and Display Utilities ---
+// Simple get_key implementation for login input
+char get_key(void) {
+    unsigned char scancode = 0;
+    int shift = 0;
+    while (1) {
+        if (keyboard_pop_scancode(&scancode)) {
+            // Handle shift
+            if (scancode == 0x2A || scancode == 0x36) { shift = 1; continue; }
+            if (scancode == 0xAA || scancode == 0xB6) { shift = 0; continue; }
+            // Ignore release codes
+            if (scancode > 0x80) continue;
+            char c = scancode_to_char(scancode, shift);
+            if (c) return c;
+        }
+    }
+}
 
 // Scancode to character conversion tables
 static const char lower_table[128] = {
