@@ -986,6 +986,28 @@ static void handle_cp_command(const char* args, char* video, int* cursor) {
 
 // --- Main Command Dispatcher ---
 void dispatch_command(const char* cmd, char* video, int* cursor) {
+                        // Admin-only command: listusers
+                        if (mini_strcmp(cmd, "listusers") == 0) {
+                            extern int current_user_idx;
+                            extern User user_table[MAX_USERS];
+                            extern int user_count;
+                            if (current_user_idx < 0 || !user_table[current_user_idx].is_admin) {
+                                print_string("Access denied: admin only.", -1, video, cursor, COLOR_RED);
+                                return;
+                            }
+                            for (int i = 0; i < user_count; i++) {
+                                print_string(user_table[i].username, -1, video, cursor, COLOR_LIGHT_CYAN);
+                            }
+                            return;
+                        }
+                    extern int current_user_idx;
+                    // Restrict sensitive commands to logged-in users (for testing)
+                    if ((cmd[0] == 'r' && cmd[1] == 'm' && (cmd[2] == ' ' || (cmd[2] == 'd' && cmd[3] == 'i' && cmd[4] == 'r'))) || mini_strcmp(cmd, "useradd") == 0 || mini_strcmp(cmd, "userdel") == 0) {
+                        if (current_user_idx < 0) {
+                            print_string("Access denied: login required.", -1, video, cursor, COLOR_RED);
+                            return;
+                        }
+                    }
                 if (mini_strcmp(cmd, "logout") == 0) {
                     extern int current_user_idx;
                     current_user_idx = -1;
