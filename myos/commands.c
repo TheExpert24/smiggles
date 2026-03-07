@@ -303,7 +303,7 @@ static void handle_ls_command(char* video, int* cursor, unsigned char color_unus
             print_string(child->name, -1, video, cursor, COLOR_LIGHT_CYAN);
             print_string_sameline("/", 1, video, cursor, COLOR_LIGHT_CYAN);
         } else {
-            print_string(child->name, -1, video, cursor, COLOR_YELLOW);
+            print_string(child->name, -1, video, cursor, COLOR_LIGHT_CYAN);
         }
     }
 }
@@ -329,7 +329,7 @@ static void handle_lsall_command(char* video, int* cursor) {
         buf[n++] = '0' + (p % 10);
         buf[n++] = ']';
         buf[n++] = 0;
-        print_string(buf, -1, video, cursor, COLOR_CYAN);
+        print_string(buf, -1, video, cursor, COLOR_LIGHT_CYAN);
     }
 }
 
@@ -1246,33 +1246,43 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
         handle_command(cmd, video, cursor, "about", "Smiggles OS is a lightweight operating system designed by Jules Miller and Vajra Vanukuri.", COLOR_LIGHT_GRAY);
     } else if (mini_strcmp(cmd, "help") == 0) {
         handle_command(cmd, video, cursor, "help",
+            "---Filesystem---\n"
             "touch file.txt - create file\n"
+            "echo \"text\" > <file> - write to file\n"
             "mkdir <path> - create directory\n"
+            "rm <path> - remove file\n"
             "rmdir <path> - remove directory\n"
             "cat file.txt - read file \n"
-            "rm <path> - remove file\n"
             "cp <location> <destination> - copy file\n"
             "mv <old> <new> - rename/move file\n"
             "grep <pattern> <file> - search in file\n"
-            "tree - directory tree\n"
             "edit <file> - text editor \n"
-            "echo \"text\" > <file> - write to file\n"
+            "filesize <file> - show file size\n"
+            "hexdump <file> - show hexdump of file\n"
             "print \"text\" - print text\n"
             "time - UTC time\n"
             "clear - clear screen\n"
-            "df - filesystem usage\n"
-            "fscheck - fs slot health\n"
+            //"df - filesystem usage\n"
+            //"fscheck - fs slot health\n"
+            //"ver - version info\n"
+            "---System commands---\n"
+            "about - about Smiggles\n"
             "ver - version info\n"
             "uptime - system uptime\n"
-            "spawn demo [count|auto on|auto off]\n"
-            "ps - list processes\n"
-            "kill <pid> - terminate process\n"
-            "wait <ticks> - syscall sleep/yield\n"
+            "neofetch - system info\n"
             "halt - shutdown\n"
             "reboot - restart\n"
-            "neofetch - system info\n"
-            "filesize <filename> - shows size of file\n",
-            COLOR_LIGHT_GREEN);
+            "---User authentication---\n"
+            "whoami - view logged in user\n"
+            "login - log in with username/password\n"
+            "logout - log out\n"
+            "edituser - edit account information\n"
+            "---Admin-only commands---\n"
+            "adduser - add new user"
+            "deluser - delete user\n"
+            "listusers - list all users\n"
+            "edituser - edit any account\n",
+            COLOR_YELLOW);
 
     } else if (is_math_expr(cmd)) {
         handle_calc_command(cmd, video, cursor);
