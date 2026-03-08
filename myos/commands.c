@@ -27,11 +27,11 @@ void read_line(char* buf, int max_len, char* video, int* cursor) {
 static void handle_filesize_command(const char* filename, char* video, int* cursor) {
     int node_idx = resolve_path(filename);
     if (node_idx == -1) {
-        print_string("File not found", 14, video, cursor, COLOR_RED);
+        print_string("File not found", 14, video, cursor, COLOR_LIGHT_RED);
         return;
     }
     if (node_table[node_idx].type != NODE_FILE) {
-        print_string("Not a file", 10, video, cursor, COLOR_RED);
+        print_string("Not a file", 10, video, cursor, COLOR_LIGHT_RED);
         return;
     }
     char buf[64];
@@ -86,7 +86,7 @@ static void print_file_already_exists_message(int node_idx, char* video, int* cu
     message[0] = 0;
     str_concat(message, "File already exists");
 
-    print_string(message, -1, video, cursor, COLOR_RED);
+    print_string(message, -1, video, cursor, COLOR_LIGHT_RED);
 }
 
 // --- Time Functions ---
@@ -238,7 +238,7 @@ static void handle_neofetch_command(char* video, int* cursor) {
             const char* line = info[i];
             if (str_equal(line, "__COLORBAR__")) {
                 //colored block with ascii 219 █)
-                print_string_sameline("\xDB\xDB\xDB", 3, video, cursor, COLOR_RED); // red
+                print_string_sameline("\xDB\xDB\xDB", 3, video, cursor, COLOR_LIGHT_RED); // red
                 print_string_sameline("\xDB\xDB\xDB", 3, video, cursor, COLOR_GREEN); // green
                 print_string_sameline("\xDB\xDB\xDB", 3, video, cursor, COLOR_YELLOW); // yellow
                 print_string_sameline("\xDB\xDB\xDB", 3, video, cursor, COLOR_BLUE); // blue
@@ -336,15 +336,32 @@ static void handle_lsall_command(char* video, int* cursor) {
 static void handle_cat_command(const char* filename, char* video, int* cursor, unsigned char color_unused) {
     int node_idx = resolve_path(filename);
     if (node_idx == -1) {
-        print_string("File not found", 14, video, cursor, COLOR_RED);
+        print_string("File not found", 14, video, cursor, COLOR_LIGHT_RED);
         return;
     }
     if (node_table[node_idx].type != NODE_FILE) {
-        print_string("Not a file", 10, video, cursor, COLOR_RED);
+        print_string("Not a file", 10, video, cursor, COLOR_LIGHT_RED);
         return;
     }
     if (node_table[node_idx].content_size <= 0) {
-        print_string("File is empty", 13, video, cursor, COLOR_RED);
+        print_string("File is empty", 13, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+    extern int current_user_idx;
+    extern User user_table[MAX_USERS];
+    int allowed = 0;
+    if (current_user_idx >= 0) {
+        if (node_table[node_idx].owner_idx == current_user_idx || user_table[current_user_idx].is_admin) {
+            allowed = 1;
+        } else {
+            // Check others read permission (last 3 bits)
+            if ((node_table[node_idx].permissions & 0x4) != 0) {
+                allowed = 1;
+            }
+        }
+    }
+    if (!allowed) {
+        print_string("Permission denied.", -1, video, cursor, COLOR_LIGHT_RED);
         return;
     }
     print_string(node_table[node_idx].content, node_table[node_idx].content_size, video, cursor, COLOR_LIGHT_CYAN);
@@ -356,7 +373,7 @@ static void handle_echo_command(const char* text, const char* filename, char* vi
         if (node_table[node_idx].type == NODE_FILE) {
             print_file_already_exists_message(node_idx, video, cursor);
         } else {
-            print_string("Cannot write file", 17, video, cursor, COLOR_RED);
+            print_string("Cannot write file", 17, video, cursor, COLOR_LIGHT_RED);
         }
         return;
     }
@@ -373,16 +390,25 @@ static void handle_echo_command(const char* text, const char* filename, char* vi
         fs_save();
         print_string("OK", 2, video, cursor, COLOR_LIGHT_GREEN);
     } else {
-        print_string("Cannot write file", 17, video, cursor, COLOR_RED);
+        print_string("Cannot write file", 17, video, cursor, COLOR_LIGHT_RED);
     }
 }
 
 static void handle_rm_command(const char* filename, char* video, int* cursor, unsigned char color_unused) {
+    int idx = resolve_path(filename);
+    if (idx == -1 || !node_table[idx].used) {
+        print_string("File not found or cannot remove root", 37, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+    extern int current_user_idx;
+    extern User user_table[MAX_USERS];
+    if (current_user_idx < 0 || (node_table[idx].owner_idx != current_user_idx && !user_table[current_user_idx].is_admin)) {
+        print_string("Permission denied.", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
     int result = fs_rm(filename, 0);
-    if (result == -1) {
-        print_string("File not found or cannot remove root", 37, video, cursor, COLOR_RED);
-    } else if (result == -2) {
-        print_string("Directory not empty. Use rmdir -r", 33, video, cursor, COLOR_RED);
+    if (result == -2) {
+        print_string("Directory not empty. Use rmdir -r", 33, video, cursor, COLOR_LIGHT_RED);
     } else {
         print_string("Removed", 7, video, cursor, COLOR_LIGHT_GREEN);
     }
@@ -406,7 +432,13 @@ void handle_clear_command(char* video, int* cursor) {
 static void handle_mv_command(const char* oldname, const char* newname, char* video, int* cursor) {
     int src_idx = resolve_path(oldname);
     if (src_idx == -1) {
-        print_string("Source not found", 16, video, cursor, COLOR_RED);
+        print_string("Source not found", 16, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+    extern int current_user_idx;
+    extern User user_table[MAX_USERS];
+    if (current_user_idx < 0 || (node_table[src_idx].owner_idx != current_user_idx && !user_table[current_user_idx].is_admin)) {
+        print_string("Permission denied.", -1, video, cursor, COLOR_LIGHT_RED);
         return;
     }
     // Simple rename in same directory
@@ -418,11 +450,11 @@ static void handle_mv_command(const char* oldname, const char* newname, char* vi
 static void handle_mkdir_command(const char* dirname, char* video, int* cursor, unsigned char color_unused) {
     int result = fs_mkdir(dirname);
     if (result == -1) {
-        print_string("Parent directory not found", 26, video, cursor, COLOR_RED);
+        print_string("Parent directory not found", 26, video, cursor, COLOR_LIGHT_RED);
     } else if (result == -2) {
-        print_string("Directory already exists", 24, video, cursor, COLOR_RED);
+        print_string("Directory already exists", 24, video, cursor, COLOR_LIGHT_RED);
     } else if (result == -3) {
-        print_string("No space for new directory", 26, video, cursor, COLOR_RED);
+        print_string("No space for new directory", 26, video, cursor, COLOR_LIGHT_RED);
     } else {
         print_string("Directory created", 17, video, cursor, COLOR_LIGHT_GREEN);
     }
@@ -436,11 +468,11 @@ static void handle_cd_command(const char* dirname, char* video, int* cursor, uns
     }
     int target_idx = resolve_path(dirname);
     if (target_idx == -1) {
-        print_string("Directory not found", 19, video, cursor, COLOR_RED);
+        print_string("Directory not found", 19, video, cursor, COLOR_LIGHT_RED);
         return;
     }
     if (node_table[target_idx].type != NODE_DIRECTORY) {
-        print_string("Not a directory", 15, video, cursor, COLOR_RED);
+        print_string("Not a directory", 15, video, cursor, COLOR_LIGHT_RED);
         return;
     }
     current_dir_idx = target_idx;
@@ -461,9 +493,9 @@ static void handle_rmdir_command(const char* dirname, char* video, int* cursor) 
     }
     int result = fs_rm(path, is_recursive);
     if (result == -1) {
-        print_string("Directory not found", 19, video, cursor, COLOR_RED);
+        print_string("Directory not found", 19, video, cursor, COLOR_LIGHT_RED);
     } else if (result == -2) {
-        print_string("Directory not empty. Use -r flag", 32, video, cursor, COLOR_RED);
+        print_string("Directory not empty. Use -r flag", 32, video, cursor, COLOR_LIGHT_RED);
     } else {
         print_string("Directory removed", 17, video, cursor, COLOR_LIGHT_GREEN);
     }
@@ -572,7 +604,7 @@ static void handle_spawn_command(const char* arg, char* video, int* cursor) {
     while (*arg == ' ') arg++;
 
     if (!(arg[0] == 'd' && arg[1] == 'e' && arg[2] == 'm' && arg[3] == 'o' && (arg[4] == 0 || arg[4] == ' '))) {
-        print_string("Usage: spawn demo [count|auto on|auto off]", -1, video, cursor, COLOR_RED);
+        print_string("Usage: spawn demo [count|auto on|auto off]", -1, video, cursor, COLOR_LIGHT_RED);
         return;
     }
 
@@ -582,7 +614,7 @@ static void handle_spawn_command(const char* arg, char* video, int* cursor) {
     if (arg[0] == 0) {
         int pid = process_spawn_demo();
         if (pid < 0) {
-            print_string("Failed to spawn process", -1, video, cursor, COLOR_RED);
+            print_string("Failed to spawn process", -1, video, cursor, COLOR_LIGHT_RED);
             return;
         }
         schedule();
@@ -609,13 +641,13 @@ static void handle_spawn_command(const char* arg, char* video, int* cursor) {
             print_string("Demo auto-respawn: OFF", -1, video, cursor, COLOR_LIGHT_GREEN);
             return;
         }
-        print_string("Usage: spawn demo auto on|off", -1, video, cursor, COLOR_RED);
+        print_string("Usage: spawn demo auto on|off", -1, video, cursor, COLOR_LIGHT_RED);
         return;
     }
 
     int count = 0;
     if (!parse_nonneg_int(arg, &count) || count <= 0) {
-        print_string("Usage: spawn demo [count|auto on|auto off]", -1, video, cursor, COLOR_RED);
+        print_string("Usage: spawn demo [count|auto on|auto off]", -1, video, cursor, COLOR_LIGHT_RED);
         return;
     }
 
@@ -636,13 +668,13 @@ static void handle_spawn_command(const char* arg, char* video, int* cursor) {
     str_concat(buf, "/");
     int_to_str(count, temp);
     str_concat(buf, temp);
-    print_string(buf, -1, video, cursor, spawned > 0 ? COLOR_LIGHT_GREEN : COLOR_RED);
+    print_string(buf, -1, video, cursor, spawned > 0 ? COLOR_LIGHT_GREEN : COLOR_LIGHT_RED);
 }
 
 static void handle_wait_command(const char* arg, char* video, int* cursor) {
     int wait_ticks = 0;
     if (!parse_nonneg_int(arg, &wait_ticks)) {
-        print_string("Usage: wait <ticks>", -1, video, cursor, COLOR_RED);
+        print_string("Usage: wait <ticks>", -1, video, cursor, COLOR_LIGHT_RED);
         return;
     }
 
@@ -693,17 +725,17 @@ static void handle_ps_command(char* video, int* cursor) {
 static void handle_kill_command(const char* arg, char* video, int* cursor) {
     int pid = 0;
     if (!parse_nonneg_int(arg, &pid)) {
-        print_string("Usage: kill <pid>", -1, video, cursor, COLOR_RED);
+        print_string("Usage: kill <pid>", -1, video, cursor, COLOR_LIGHT_RED);
         return;
     }
 
     int result = process_kill(pid);
     if (result == -1) {
-        print_string("Invalid pid", -1, video, cursor, COLOR_RED);
+        print_string("Invalid pid", -1, video, cursor, COLOR_LIGHT_RED);
         return;
     }
     if (result == -2) {
-        print_string("Process slot is unused", -1, video, cursor, COLOR_RED);
+        print_string("Process slot is unused", -1, video, cursor, COLOR_LIGHT_RED);
         return;
     }
 
@@ -757,7 +789,7 @@ static void handle_syscalltest_command(char* video, int* cursor) {
 
 static void handle_halt_command(char* video, int* cursor) {
     handle_clear_command(video, cursor);
-    print_string("Shutting down...", 15, video, cursor, COLOR_RED);
+    print_string("Shutting down...", 15, video, cursor, COLOR_LIGHT_RED);
     // Shutdown for QEMU
     asm volatile("outw %0, %1" : : "a"((unsigned short)0x2000), "Nd"((unsigned short)0x604));
     while (1) {}
@@ -778,7 +810,7 @@ static void byte_to_hex(unsigned char byte, char* buf) {
 static void handle_hexdump_command(const char* filename, char* video, int* cursor) {
     int node_idx = resolve_path(filename);
     if (node_idx == -1 || node_table[node_idx].type != NODE_FILE) {
-        print_string("File not found", 14, video, cursor, COLOR_RED);
+        print_string("File not found", 14, video, cursor, COLOR_LIGHT_RED);
         return;
     }
     char buf[4];
@@ -803,7 +835,7 @@ static void handle_pwd_command(char* video, int* cursor) {
 static void handle_touch_command(const char* filename, char* video, int* cursor) {
     while (*filename == ' ') filename++;
     if (*filename == 0) {
-        print_string("Usage: touch <filename>", 23, video, cursor, COLOR_RED);
+        print_string("Usage: touch <filename>", 23, video, cursor, COLOR_LIGHT_RED);
         return;
     }
     char clean_name[MAX_PATH_LENGTH];
@@ -815,7 +847,7 @@ static void handle_touch_command(const char* filename, char* video, int* cursor)
     while (n > 0 && clean_name[n - 1] == ' ') n--;
     clean_name[n] = 0;
     if (clean_name[0] == 0) {
-        print_string("Usage: touch <filename>", 23, video, cursor, COLOR_RED);
+        print_string("Usage: touch <filename>", 23, video, cursor, COLOR_LIGHT_RED);
         return;
     }
 
@@ -827,7 +859,7 @@ static void handle_touch_command(const char* filename, char* video, int* cursor)
 
     int result = fs_touch(clean_name, "");
     if (result < 0) {
-        print_string("Cannot create file", 18, video, cursor, COLOR_RED);
+        print_string("Cannot create file", 18, video, cursor, COLOR_LIGHT_RED);
     } else {
         print_string("File created", 12, video, cursor, COLOR_LIGHT_GREEN);
     }
@@ -951,7 +983,7 @@ static void handle_grep_command(const char* args, char* video, int* cursor) {
     }
     
     if (!match_found) {
-        print_string("No matches found", 16, video, cursor, COLOR_RED);
+        print_string("No matches found", 16, video, cursor, COLOR_LIGHT_RED);
     }
 }
 
@@ -986,178 +1018,283 @@ static void handle_cp_command(const char* args, char* video, int* cursor) {
 
 // --- Main Command Dispatcher ---
 void dispatch_command(const char* cmd, char* video, int* cursor) {
-                                    // edituser command
-                                    if (mini_strcmp(cmd, "edituser") == 0) {
-                                        extern int current_user_idx;
-                                        extern User user_table[MAX_USERS];
-                                        extern int user_count;
-                                        extern void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cursor);
-                                        extern void fs_save();
-                                        int target_idx = -1;
-                                        if (current_user_idx < 0) {
-                                            print_string("Not logged in.", -1, video, cursor, COLOR_LIGHT_RED);
-                                            return;
-                                        }
-                                        if (user_table[current_user_idx].is_admin) {
-                                            char username[MAX_NAME_LENGTH];
-                                            shell_read_line("Current username: ", username, MAX_NAME_LENGTH, video, cursor);
-                                            for (int i = 0; i < user_count; i++) {
-                                                if (mini_strcmp(username, user_table[i].username) == 0) {
-                                                    target_idx = i;
-                                                    break;
-                                                }
-                                            }
-                                            if (target_idx == -1) {
-                                                print_string("User not found.", -1, video, cursor, COLOR_LIGHT_RED);
-                                                return;
-                                            }
-                                        } else {
-                                            target_idx = current_user_idx;
-                                        }
-                                        char new_username[MAX_NAME_LENGTH];
-                                        char new_password[MAX_NAME_LENGTH];
-                                        shell_read_line("New username: ", new_username, MAX_NAME_LENGTH, video, cursor);
-                                        shell_read_line("New password: ", new_password, MAX_NAME_LENGTH, video, cursor);
-                                        str_copy(user_table[target_idx].username, new_username, MAX_NAME_LENGTH);
-                                        str_copy(user_table[target_idx].password, new_password, MAX_NAME_LENGTH);
-                                        fs_save();
-                                        print_string("User updated.", -1, video, cursor, COLOR_LIGHT_GREEN);
-                                        return;
-                                    }
-                                // Debug command: dumpusers (prints all usernames and admin status)
-                                if (mini_strcmp(cmd, "dumpusers") == 0) {
-                                    extern User user_table[MAX_USERS];
-                                    extern int user_count;
-                                    char buf[64];
-                                    for (int i = 0; i < user_count; i++) {
-                                        int n = 0;
-                                        str_copy(buf+n, user_table[i].username, 32);
-                                        n += str_len(user_table[i].username);
-                                        str_copy(buf+n, " [", 3);
-                                        n += str_len(" [");
-                                        buf[n++] = user_table[i].is_admin ? 'A' : 'U';
-                                        buf[n++] = ']';
-                                        buf[n++] = 0;
-                                        print_string(buf, -1, video, cursor, COLOR_LIGHT_CYAN);
-                                    }
-                                    return;
-                                }
-                            // Admin-only: adduser
-                            if (mini_strcmp(cmd, "adduser") == 0) {
-                                extern int current_user_idx;
-                                extern User user_table[MAX_USERS];
-                                extern int user_count;
-                                extern void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cursor);
-                                if (current_user_idx < 0 || !user_table[current_user_idx].is_admin) {
-                                    print_string("Access denied: admin only.", -1, video, cursor, COLOR_LIGHT_RED);
-                                    return;
-                                }
-                                if (user_count >= MAX_USERS) {
-                                    print_string("User limit reached.", -1, video, cursor, COLOR_LIGHT_RED);
-                                    return;
-                                }
-                                char username[MAX_NAME_LENGTH];
-                                char password[MAX_NAME_LENGTH];
-                                shell_read_line("New username: ", username, MAX_NAME_LENGTH, video, cursor);
-                                // Check for duplicate username
-                                for (int i = 0; i < user_count; i++) {
-                                    if (mini_strcmp(username, user_table[i].username) == 0) {
-                                        print_string("Username exists.", -1, video, cursor, COLOR_LIGHT_RED);
-                                        return;
-                                    }
-                                }
-                                shell_read_line("New password: ", password, MAX_NAME_LENGTH, video, cursor);
-                                user_table[user_count].is_admin = 0;
-                                str_copy(user_table[user_count].username, username, MAX_NAME_LENGTH);
-                                str_copy(user_table[user_count].password, password, MAX_NAME_LENGTH);
-                                user_count++;
-                                extern void fs_save();
-                                fs_save();
-                                print_string("User added.", -1, video, cursor, COLOR_LIGHT_GREEN);
-                                return;
-                            }
-
-                            // Admin-only: deluser
-                            if (mini_strcmp(cmd, "deluser") == 0) {
-                                extern int current_user_idx;
-                                extern User user_table[MAX_USERS];
-                                extern int user_count;
-                                extern void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cursor);
-                                if (current_user_idx < 0 || !user_table[current_user_idx].is_admin) {
-                                    print_string("Access denied: admin only.", -1, video, cursor, COLOR_LIGHT_RED);
-                                    return;
-                                }
-                                char username[MAX_NAME_LENGTH];
-                                shell_read_line("Delete username: ", username, MAX_NAME_LENGTH, video, cursor);
-                                int idx = -1;
-                                int admin_count = 0;
-                                for (int i = 0; i < user_count; i++) {
-                                    if (user_table[i].is_admin) admin_count++;
-                                    if (mini_strcmp(username, user_table[i].username) == 0) idx = i;
-                                }
-                                if (idx == -1) {
-                                    print_string("User not found.", -1, video, cursor, COLOR_LIGHT_RED);
-                                    return;
-                                }
-                                if (idx == current_user_idx) {
-                                    print_string("Cannot delete current user.", -1, video, cursor, COLOR_LIGHT_RED);
-                                    return;
-                                }
-                                if (user_table[idx].is_admin && admin_count <= 1) {
-                                    print_string("Cannot delete last admin.", -1, video, cursor, COLOR_RED);
-                                    return;
-                                }
-                                // Shift users
-                                for (int i = idx; i < user_count-1; i++) user_table[i] = user_table[i+1];
-                                user_count--;
-                                extern void fs_save();
-                                fs_save();
-                                print_string("User deleted.", -1, video, cursor, COLOR_LIGHT_GREEN);
-                                return;
-                            }
-                        // Admin-only command: listusers
-                        if (mini_strcmp(cmd, "listusers") == 0) {
-                            extern int current_user_idx;
-                            extern User user_table[MAX_USERS];
-                            extern int user_count;
-                            if (current_user_idx < 0 || !user_table[current_user_idx].is_admin) {
-                                print_string("Access denied: admin only.", -1, video, cursor, COLOR_LIGHT_RED);
-                                return;
-                            }
-                            for (int i = 0; i < user_count; i++) {
-                                print_string(user_table[i].username, -1, video, cursor, COLOR_LIGHT_CYAN);
-                            }
-                            return;
-                        }
-                    extern int current_user_idx;
-                    //Restrict sensitive commands to logged-in users 
-                    //TODO: let regular 
-                    if ((cmd[0] == 'r' && cmd[1] == 'm' && (cmd[2] == ' ' || (cmd[2] == 'd' && cmd[3] == 'i' && cmd[4] == 'r'))) || mini_strcmp(cmd, "useradd") == 0 || mini_strcmp(cmd, "userdel") == 0) {
-                        if (current_user_idx < 0) {
-                            print_string("Access denied: login required.", -1, video, cursor, COLOR_LIGHT_RED);
-                            return;
-                        }
-                    }
-                if (mini_strcmp(cmd, "logout") == 0) {
-                    extern int current_user_idx;
-                    current_user_idx = -1;
-                    print_string("Logged out.", -1, video, cursor, COLOR_LIGHT_GREEN);
-                    return;
-                }
-            if (mini_strcmp(cmd, "whoami") == 0) {
-                extern int current_user_idx;
-                extern User user_table[MAX_USERS];
-                if (current_user_idx >= 0) {
-                    print_string(user_table[current_user_idx].username, -1, video, cursor, COLOR_LIGHT_CYAN);
-                } else {
-                    print_string("guest", -1, video, cursor, COLOR_LIGHT_CYAN);
-                }
-                return;
-            }
-        if (mini_strcmp(cmd, "login") == 0) {
-            handle_login_command(video, cursor);
+    // chmod: allow owner and admin, new format: chmod <filename>
+    if (cmd[0] == 'c' && cmd[1] == 'h' && cmd[2] == 'm' && cmd[3] == 'o' && cmd[4] == 'd' && cmd[5] == ' ') {
+        extern int current_user_idx;
+        extern User user_table[MAX_USERS];
+        extern void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cursor);
+        if (current_user_idx < 0) {
+            print_string("Permission denied: only logged-in users can change permissions.", -1, video, cursor, COLOR_LIGHT_RED);
             return;
         }
+        int start = 6;
+        while (cmd[start] == ' ') start++;
+        char filename[MAX_NAME_LENGTH];
+        int fn = 0;
+        while (cmd[start] && fn < MAX_NAME_LENGTH-1) filename[fn++] = cmd[start++];
+        filename[fn] = 0;
+        int idx = resolve_path(filename);
+        if (idx == -1 || !node_table[idx].used) {
+            print_string("File not found.", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+        if (node_table[idx].owner_idx != current_user_idx && !user_table[current_user_idx].is_admin) {
+            print_string("Permission denied: only owner or admin can change permissions.", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+        char perm_str[16];
+        shell_read_line("Permissions (e.g. 600, 644, or 666): ", perm_str, 16, video, cursor);
+        unsigned short perms = 0;
+        int symbolic = 0;
+        for (int i = 0; perm_str[i]; i++) {
+            if (perm_str[i] == 'r' || perm_str[i] == 'w' || perm_str[i] == 'x' || perm_str[i] == '-') {
+                symbolic = 1;
+                break;
+            }
+        }
+        if (symbolic) {
+            if (str_len(perm_str) < 9) {
+                print_string("Invalid symbolic permissions.", -1, video, cursor, COLOR_LIGHT_RED);
+                return;
+            }
+            for (int i = 0; i < 9; i++) {
+                int bit = 0;
+                if (perm_str[i] == 'r') bit = 4;
+                else if (perm_str[i] == 'w') bit = 2;
+                else if (perm_str[i] == 'x') bit = 1;
+                else if (perm_str[i] == '-') bit = 0;
+                else {
+                    print_string("Invalid character in permissions.", -1, video, cursor, COLOR_LIGHT_RED);
+                    return;
+                }
+                perms |= bit << (8 - i);
+            }
+        } else {
+            for (int i = 0; perm_str[i] && i < 4; i++) {
+                if (perm_str[i] < '0' || perm_str[i] > '7') {
+                    print_string("Invalid octal permissions.", -1, video, cursor, COLOR_LIGHT_RED);
+                    return;
+                }
+                perms = perms * 8 + (perm_str[i] - '0');
+            }
+        }
+        node_table[idx].permissions = perms;
+        fs_save();
+        print_string("Permissions updated.", -1, video, cursor, COLOR_LIGHT_GREEN);
+        return;
+    }
+
+    // chown: admin only, new format: chown <filename>
+    if (cmd[0] == 'c' && cmd[1] == 'h' && cmd[2] == 'o' && cmd[3] == 'w' && cmd[4] == 'n' && cmd[5] == ' ') {
+        extern int current_user_idx;
+        extern User user_table[MAX_USERS];
+        extern int user_count;
+        extern void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cursor);
+        if (current_user_idx < 0 || !user_table[current_user_idx].is_admin) {
+            print_string("Access denied: admin only.", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+        int start = 6;
+        while (cmd[start] == ' ') start++;
+        char filename[MAX_NAME_LENGTH];
+        int fn = 0;
+        while (cmd[start] && fn < MAX_NAME_LENGTH-1) filename[fn++] = cmd[start++];
+        filename[fn] = 0;
+        int idx = resolve_path(filename);
+        if (idx == -1 || !node_table[idx].used) {
+            print_string("File not found.", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+        char username[MAX_NAME_LENGTH];
+        shell_read_line("New owner username: ", username, MAX_NAME_LENGTH, video, cursor);
+        int owner_idx = -1;
+        for (int i = 0; i < user_count; i++) {
+            if (mini_strcmp(username, user_table[i].username) == 0) {
+                owner_idx = i;
+                break;
+            }
+        }
+        if (owner_idx == -1) {
+            print_string("User not found.", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+        node_table[idx].owner_idx = owner_idx;
+        fs_save();
+        print_string("Owner updated.", -1, video, cursor, COLOR_LIGHT_GREEN);
+        return;
+    }
+    // edituser command
+    if (mini_strcmp(cmd, "edituser") == 0) {
+        extern int current_user_idx;
+        extern User user_table[MAX_USERS];
+        extern int user_count;
+        extern void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cursor);
+        extern void fs_save();
+        int target_idx = -1;
+        if (current_user_idx < 0) {
+            print_string("Not logged in.", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+        if (user_table[current_user_idx].is_admin) {
+            char username[MAX_NAME_LENGTH];
+            shell_read_line("Current username: ", username, MAX_NAME_LENGTH, video, cursor);
+            for (int i = 0; i < user_count; i++) {
+                if (mini_strcmp(username, user_table[i].username) == 0) {
+                    target_idx = i;
+                    break;
+                }
+            }
+            if (target_idx == -1) {
+                print_string("User not found.", -1, video, cursor, COLOR_LIGHT_RED);
+                return;
+            }
+        } else {
+            target_idx = current_user_idx;
+        }
+        char new_username[MAX_NAME_LENGTH];
+        char new_password[MAX_NAME_LENGTH];
+        shell_read_line("New username: ", new_username, MAX_NAME_LENGTH, video, cursor);
+        shell_read_line("New password: ", new_password, MAX_NAME_LENGTH, video, cursor);
+        str_copy(user_table[target_idx].username, new_username, MAX_NAME_LENGTH);
+        str_copy(user_table[target_idx].password, new_password, MAX_NAME_LENGTH);
+        fs_save();
+        print_string("User updated.", -1, video, cursor, COLOR_LIGHT_GREEN);
+        return;
+    }
+    // Debug command: dumpusers (prints all usernames and admin status)
+    if (mini_strcmp(cmd, "dumpusers") == 0) {
+        extern User user_table[MAX_USERS];
+        extern int user_count;
+        char buf[64];
+        for (int i = 0; i < user_count; i++) {
+            int n = 0;
+            str_copy(buf+n, user_table[i].username, 32);
+            n += str_len(user_table[i].username);
+            str_copy(buf+n, " [", 3);
+            n += str_len(" [");
+            buf[n++] = user_table[i].is_admin ? 'A' : 'U';
+            buf[n++] = ']';
+            buf[n++] = 0;
+            print_string(buf, -1, video, cursor, COLOR_LIGHT_CYAN);
+        }
+        return;
+    }
+    // Admin-only: adduser
+    if (mini_strcmp(cmd, "adduser") == 0) {
+        extern int current_user_idx;
+        extern User user_table[MAX_USERS];
+        extern int user_count;
+        extern void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cursor);
+        if (current_user_idx < 0 || !user_table[current_user_idx].is_admin) {
+            print_string("Access denied: admin only.", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+        if (user_count >= MAX_USERS) {
+            print_string("User limit reached.", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+        char username[MAX_NAME_LENGTH];
+        char password[MAX_NAME_LENGTH];
+        shell_read_line("New username: ", username, MAX_NAME_LENGTH, video, cursor);
+        // Check for duplicate username
+        for (int i = 0; i < user_count; i++) {
+            if (mini_strcmp(username, user_table[i].username) == 0) {
+                print_string("Username exists.", -1, video, cursor, COLOR_LIGHT_RED);
+                return;
+            }
+        }
+        shell_read_line("New password: ", password, MAX_NAME_LENGTH, video, cursor);
+        user_table[user_count].is_admin = 0;
+        str_copy(user_table[user_count].username, username, MAX_NAME_LENGTH);
+        str_copy(user_table[user_count].password, password, MAX_NAME_LENGTH);
+        user_count++;
+        extern void fs_save();
+        fs_save();
+        print_string("User added.", -1, video, cursor, COLOR_LIGHT_GREEN);
+        return;
+    }
+
+    // Admin-only: deluser
+    if (mini_strcmp(cmd, "deluser") == 0) {
+        extern int current_user_idx;
+        extern User user_table[MAX_USERS];
+        extern int user_count;
+        extern void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cursor);
+        if (current_user_idx < 0 || !user_table[current_user_idx].is_admin) {
+            print_string("Access denied: admin only.", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+        char username[MAX_NAME_LENGTH];
+        shell_read_line("Delete username: ", username, MAX_NAME_LENGTH, video, cursor);
+        int idx = -1;
+        int admin_count = 0;
+        for (int i = 0; i < user_count; i++) {
+            if (user_table[i].is_admin) admin_count++;
+            if (mini_strcmp(username, user_table[i].username) == 0) idx = i;
+        }
+        if (idx == -1) {
+            print_string("User not found.", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+        if (idx == current_user_idx) {
+            print_string("Cannot delete current user.", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+        if (user_table[idx].is_admin && admin_count <= 1) {
+            print_string("Cannot delete last admin.", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+        // Shift users
+        for (int i = idx; i < user_count-1; i++) user_table[i] = user_table[i+1];
+        user_count--;
+        extern void fs_save();
+        fs_save();
+        print_string("User deleted.", -1, video, cursor, COLOR_LIGHT_GREEN);
+        return;
+    }
+    // Admin-only command: listusers
+    if (mini_strcmp(cmd, "listusers") == 0) {
+        extern int current_user_idx;
+        extern User user_table[MAX_USERS];
+        extern int user_count;
+        if (current_user_idx < 0 || !user_table[current_user_idx].is_admin) {
+            print_string("Access denied: admin only.", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+        for (int i = 0; i < user_count; i++) {
+            print_string(user_table[i].username, -1, video, cursor, COLOR_LIGHT_CYAN);
+        }
+        return;
+    }
+    extern int current_user_idx;
+    //Restrict sensitive commands to logged-in users 
+    //TODO: let regular 
+    if ((cmd[0] == 'r' && cmd[1] == 'm' && (cmd[2] == ' ' || (cmd[2] == 'd' && cmd[3] == 'i' && cmd[4] == 'r'))) || mini_strcmp(cmd, "useradd") == 0 || mini_strcmp(cmd, "userdel") == 0) {
+        if (current_user_idx < 0) {
+            print_string("Access denied: login required.", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+    }
+    if (mini_strcmp(cmd, "logout") == 0) {
+        extern int current_user_idx;
+        current_user_idx = -1;
+        print_string("Logged out.", -1, video, cursor, COLOR_LIGHT_GREEN);
+        return;
+    }
+    if (mini_strcmp(cmd, "whoami") == 0) {
+        extern int current_user_idx;
+        extern User user_table[MAX_USERS];
+        if (current_user_idx >= 0) {
+            print_string(user_table[current_user_idx].username, -1, video, cursor, COLOR_LIGHT_CYAN);
+        } else {
+            print_string("guest", -1, video, cursor, COLOR_LIGHT_CYAN);
+        }
+        return;
+    }
+    if (mini_strcmp(cmd, "login") == 0) {
+        handle_login_command(video, cursor);
+        return;
+    }
     // nano-like editor: edit filename.txt
     if (cmd[0] == 'e' && cmd[1] == 'd' && cmd[2] == 'i' && cmd[3] == 't' && cmd[4] == ' ') {
         int start = 5;
@@ -1166,6 +1303,17 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
         int fn = 0;
         while (cmd[start] && fn < MAX_FILE_NAME-1) filename[fn++] = cmd[start++];
         filename[fn] = 0;
+        int idx = resolve_path(filename);
+        extern int current_user_idx;
+        extern User user_table[MAX_USERS];
+        if (idx == -1 || !node_table[idx].used) {
+            print_string("File not found", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+        if (current_user_idx < 0 || (node_table[idx].owner_idx != current_user_idx && !user_table[current_user_idx].is_admin)) {
+            print_string("Permission denied.", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
         nano_editor(filename, video, cursor);
         return;
     }

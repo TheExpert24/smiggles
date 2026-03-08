@@ -146,6 +146,8 @@ typedef struct FSNode {
     char content[MAX_FILE_CONTENT];
     int content_size;
     int used;
+    int owner_idx; // index of owning user
+    unsigned short permissions; // permission bits: rwx for owner/group/others
     } __attribute__((packed)) FSNode;
 
 typedef struct {

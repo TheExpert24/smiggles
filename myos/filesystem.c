@@ -521,6 +521,7 @@ int fs_touch(const char* path, const char* content) {
     node_table[new_idx].parent_idx = parent_idx;
     node_table[new_idx].child_count = 0;
     str_copy(node_table[new_idx].name, filename, MAX_NAME_LENGTH);
+        node_table[new_idx].owner_idx = current_user_idx; // Set owner to creator
     
     if (content) {
         int len = 0;
