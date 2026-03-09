@@ -179,6 +179,26 @@ void set_cursor_position(int cursor) {
 
 // Convert scancode to character based on shift state
 char scancode_to_char(unsigned char scancode, int shift) {
+    // Numpad keys
+    switch (scancode) {
+        case 0x52: return '0';
+        case 0x4F: return '1';
+        case 0x50: return '2';
+        case 0x51: return '3';
+        case 0x4B: return '4';
+        case 0x4C: return '5';
+        case 0x4D: return '6';
+        case 0x47: return '7';
+        case 0x48: return '8';
+        case 0x49: return '9';
+        case 0x53: return '.';
+        case 0x37: return '*';
+        case 0x4A: return '-';
+        case 0x4E: return '+';
+        case 0x35: return '/';
+        case 0x1C: return '\n'; // Enter
+    }
+    // Default: use tables
     if (shift) {
         return upper_table[scancode];
     } else {
