@@ -59,11 +59,26 @@ void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cur
     int len = 0;
     int cmd_cursor = 0;
     int shift = 0;
+    int e0_prefix_pending = 0;
     while (1) {
         unsigned char scancode;
         if (!keyboard_pop_scancode(&scancode)) continue;
         if (scancode == 0x2A || scancode == 0x36) { shift = 1; continue; }
         if (scancode == 0xAA || scancode == 0xB6) { shift = 0; continue; }
+
+        if (scancode == 0xE0) {
+            e0_prefix_pending = 1;
+            continue;
+        }
+
+        if (e0_prefix_pending) {
+            e0_prefix_pending = 0;
+            if (scancode & 0x80) continue;
+            if (scancode == 0x1C) scancode = 0x1C;
+            else if (scancode == 0x35) scancode = 0x35;
+            else continue;
+        }
+
         if (scancode > 0x80) continue;
         char c = scancode_to_char(scancode, shift);
         if (!c) continue;
@@ -212,7 +227,9 @@ void kernel_main(void) {
         }
 
         if (e0_prefix) {
-            if (scancode == 0x4B) { // Left arrow
+            if (scancode == 0x1C || scancode == 0x35) {
+                // Numpad Enter and numpad slash should be processed like normal keys
+            } else if (scancode == 0x4B) { // Left arrow
                 if (tab_completion_active && tab_completion_position > 0) {
                     // Navigate tab completion backwards
                     tab_completion_position--;
@@ -336,7 +353,9 @@ void kernel_main(void) {
                 }
                 continue;
             }
-            continue; // Ignore other E0 keys
+            else {
+                continue; // Ignore other E0 keys
+            }
         }
 
         char c = scancode_to_char(scancode, shift);

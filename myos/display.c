@@ -126,11 +126,27 @@ void print_string_sameline(const char* str, int len, char* video, int* cursor, u
 char get_key(void) {
     unsigned char scancode = 0;
     int shift = 0;
+    int e0_prefix_pending = 0;
     while (1) {
         if (keyboard_pop_scancode(&scancode)) {
             // Handle shift
             if (scancode == 0x2A || scancode == 0x36) { shift = 1; continue; }
             if (scancode == 0xAA || scancode == 0xB6) { shift = 0; continue; }
+
+            // Handle E0-prefixed extended keys (e.g. numpad Enter)
+            if (scancode == 0xE0) {
+                e0_prefix_pending = 1;
+                continue;
+            }
+
+            if (e0_prefix_pending) {
+                e0_prefix_pending = 0;
+                if (scancode & 0x80) continue;
+                if (scancode == 0x1C) return '\n';
+                if (scancode == 0x35) return '/';
+                continue;
+            }
+
             // Ignore release codes
             if (scancode > 0x80) continue;
             char c = scancode_to_char(scancode, shift);
@@ -152,6 +168,10 @@ static const char lower_table[128] = {
     [0x33] = ',', [0x34] = '.', [0x35] = '/', [0x39] = ' ', [0x1C] = '\n', [0x0E] = 8,
     [0x0F] = '\t',
     [0x37] = '*', [0x4A] = '-', [0x4E] = '+',
+    [0x47] = '7', [0x48] = '8', [0x49] = '9',
+    [0x4B] = '4', [0x4C] = '5', [0x4D] = '6',
+    [0x4F] = '1', [0x50] = '2', [0x51] = '3',
+    [0x52] = '0', [0x53] = '.',
 };
 
 static const char upper_table[128] = {
@@ -163,9 +183,13 @@ static const char upper_table[128] = {
     [0x1A] = '{', [0x1B] = '}', [0x1E] = 'A', [0x1F] = 'S', [0x20] = 'D', [0x21] = 'F', [0x22] = 'G', [0x23] = 'H',
     [0x24] = 'J', [0x25] = 'K', [0x26] = 'L', [0x27] = ':', [0x28] = '"', [0x29] = '~',
     [0x2B] = '|', [0x2C] = 'Z', [0x2D] = 'X', [0x2E] = 'C', [0x2F] = 'V', [0x30] = 'B', [0x31] = 'N', [0x32] = 'M',
-    [0x33] = '<', [0x34] = '>', [0x35] = '?', [0x39] = ' ', [0x1C] = '\n', [0x0E] = 8,
+    [0x33] = '<', [0x34] = '>', [0x35] = '?', [0x39] = ' ', [0x0E] = 8,
     [0x0F] = '\t',
     [0x37] = '*', [0x4A] = '-', [0x4E] = '+',
+    [0x47] = '7', [0x48] = '8', [0x49] = '9',
+    [0x4B] = '4', [0x4C] = '5', [0x4D] = '6',
+    [0x4F] = '1', [0x50] = '2', [0x51] = '3',
+    [0x52] = '0', [0x53] = '.',
 };
 
 // Set VGA hardware cursor position
