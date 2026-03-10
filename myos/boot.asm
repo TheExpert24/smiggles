@@ -30,7 +30,7 @@ load_kernel:
 
     ; Load kernel sectors one-by-one so we can safely cross tracks.
     ; Keep this comfortably above current kernel.bin size.
-    mov si, 96          ; sectors to read
+    mov si, 192         ; sectors to read
     mov ch, 0           ; cylinder
     mov dh, 0           ; head
     mov cl, 2           ; sector (starts after boot sector)
@@ -43,6 +43,11 @@ load_kernel:
     jc disk_error
 
     add bx, 512
+    jnc .no_seg_bump
+    mov ax, es
+    add ax, 0x1000
+    mov es, ax
+.no_seg_bump:
 
     inc cl
     cmp cl, 19          ; sectors are 1..18

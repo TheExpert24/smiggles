@@ -251,6 +251,9 @@ void nano_editor(const char* filename, char* video, int* cursor);
 int is_math_expr(const char* s);
 void handle_calc_command(const char* expr, char* video, int* cursor);
 
+// Tiny BASIC
+void basic_repl(char* video, int* cursor);
+
 // Commands
 void dispatch_command(const char* cmd, char* video, int* cursor);
 void add_to_history(const char* cmd);

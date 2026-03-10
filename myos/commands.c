@@ -1416,6 +1416,7 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
             "ver - version info\n"
             "uptime - system uptime\n"
             "neofetch - system info\n"
+            "basic - BASIC interpreter\n"
             "halt - shutdown\n"
             "reboot - restart\n",
             -1, video, cursor, COLOR_LIGHT_CYAN);
@@ -1433,6 +1434,9 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
             "edituser - edit any account\n"
             "chown <file> - change file owner",
             -1, video, cursor, COLOR_LIGHT_GREEN);
+
+    } else if (mini_strcmp(cmd, "basic") == 0) {
+        basic_repl(video, cursor);
 
     } else if (is_math_expr(cmd)) {
         handle_calc_command(cmd, video, cursor);
@@ -1497,7 +1501,7 @@ void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* v
     const char* commands[] = {
         "ls", "cd", "pwd", "cat", "mkdir", "rmdir", "rm", "touch", "cp", "mv",
         "echo", "edit", "tree", "grep", "clear", "cls", "help", "time", "ping",
-        "about", "ver", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "filesize", "neofetch", "syscalltest", "spawn", "ps", "kill", "wait"
+        "about", "ver", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "filesize", "neofetch", "basic", "syscalltest", "spawn", "ps", "kill", "wait"
     };
     int cmd_count = (int)(sizeof(commands) / sizeof(commands[0]));
     

@@ -30,6 +30,9 @@ display.o: display.c
 calculator.o: calculator.c
 	$(CC) -ffreestanding -c calculator.c -o calculator.o
 
+basic.o: basic.c
+	$(CC) -ffreestanding -c basic.c -o basic.o
+
 editor.o: editor.c
 	$(CC) -ffreestanding -c editor.c -o editor.o
 
@@ -48,8 +51,8 @@ syscall.o: syscall.c
 protection.o: protection.c
 	$(CC) -ffreestanding -c protection.c -o protection.o
 
-kernel.bin: kernel_entry.o kernel.o interrupts.o memory.o filesystem.o display.o calculator.o editor.o commands.o diskio.o ata.o process.o syscall.o protection.o
-	$(LD) -Ttext 0x10000 kernel_entry.o kernel.o interrupts.o memory.o filesystem.o display.o calculator.o editor.o commands.o diskio.o ata.o process.o syscall.o protection.o -o kernel.bin --oformat binary
+kernel.bin: kernel_entry.o kernel.o interrupts.o memory.o filesystem.o display.o calculator.o basic.o editor.o commands.o diskio.o ata.o process.o syscall.o protection.o
+	$(LD) -Ttext 0x10000 kernel_entry.o kernel.o interrupts.o memory.o filesystem.o display.o calculator.o basic.o editor.o commands.o diskio.o ata.o process.o syscall.o protection.o -o kernel.bin --oformat binary
 process.o: process.c
 	$(CC) -ffreestanding -c process.c -o process.o
 
