@@ -131,7 +131,7 @@ int display_scroll_view(int delta, char* video) {
         return 0;
     }
 
-    int next_offset = scrollback_offset + delta;
+    int next_offset = scrollback_offset - delta; //make it + delta to swithc scroll direction
     if (next_offset < 0) next_offset = 0;
     if (next_offset > scrollback_count) next_offset = scrollback_count;
 
