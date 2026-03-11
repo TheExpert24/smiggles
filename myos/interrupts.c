@@ -24,15 +24,68 @@ static volatile int mouse_accum_y = 0;
 static volatile int mouse_scroll_freeze_packets = 0;
 static volatile unsigned char mouse_packet[4];
 
-#define MOUSE_X_DIVISOR 6
-#define MOUSE_Y_DIVISOR 12
+#define MOUSE_X_DIVISOR 10
+#define MOUSE_Y_DIVISOR 20
 #define MOUSE_SCROLL_FREEZE_PACKETS 3
-#define MOUSE_MAX_STEP_PER_PACKET 1
+#define MOUSE_MAX_STEP_PER_PACKET 2
 
 static int clamp_step(int value, int min_value, int max_value) {
     if (value < min_value) return min_value;
     if (value > max_value) return max_value;
     return value;
+}
+
+static void append_hex32(char* buf, unsigned int value) {
+    const char hex_chars[] = "0123456789ABCDEF";
+    int len = str_len(buf);
+    if (len > 53) return;
+
+    buf[len++] = '0';
+    buf[len++] = 'x';
+    for (int shift = 28; shift >= 0; shift -= 4) {
+        buf[len++] = hex_chars[(value >> shift) & 0xF];
+    }
+    buf[len] = 0;
+}
+
+static const char* exception_name(unsigned int vector) {
+    static const char* names[32] = {
+        "Divide-by-zero error",
+        "Debug exception",
+        "Non-maskable interrupt",
+        "Breakpoint",
+        "Overflow",
+        "BOUND range exceeded",
+        "Invalid opcode",
+        "Device not available",
+        "Double fault",
+        "Coprocessor segment overrun",
+        "Invalid TSS",
+        "Segment not present",
+        "Stack-segment fault",
+        "General protection fault",
+        "Page fault",
+        "Reserved exception",
+        "x87 floating-point exception",
+        "Alignment check",
+        "Machine check",
+        "SIMD floating-point exception",
+        "Virtualization exception",
+        "Control protection exception",
+        "Reserved exception",
+        "Reserved exception",
+        "Reserved exception",
+        "Reserved exception",
+        "Reserved exception",
+        "Reserved exception",
+        "Hypervisor injection exception",
+        "VMM communication exception",
+        "Security exception",
+        "Reserved exception"
+    };
+
+    if (vector < 32) return names[vector];
+    return "Unknown exception";
 }
 
 static int ps2_wait_write_ready(void) {
@@ -208,6 +261,26 @@ void mouse_handler() {
 
     asm volatile("outb %0, %1" : : "a"((unsigned char)PIC_EOI), "Nd"((uint16_t)PIC2_COMMAND));
     asm volatile("outb %0, %1" : : "a"((unsigned char)PIC_EOI), "Nd"((uint16_t)PIC1_COMMAND));
+}
+
+void exception_handler(unsigned int vector, unsigned int error_code, unsigned int eip, unsigned int cs, unsigned int eflags) {
+    char detail[160];
+    char value_buf[32];
+
+    detail[0] = 0;
+    str_concat(detail, "Vector ");
+    int_to_str((int)vector, value_buf);
+    str_concat(detail, value_buf);
+    str_concat(detail, "  Error ");
+    append_hex32(detail, error_code);
+    str_concat(detail, "  EIP ");
+    append_hex32(detail, eip);
+    str_concat(detail, "  CS ");
+    append_hex32(detail, cs);
+    str_concat(detail, "  EFLAGS ");
+    append_hex32(detail, eflags);
+
+    kernel_panic(exception_name(vector), detail);
 }
 
 int keyboard_pop_scancode(unsigned char* out_scancode) {

@@ -799,6 +799,10 @@ static void handle_reboot_command() {
     asm volatile ("int $0x19"); // BIOS reboot interrupt
 }
 
+static void handle_panic_command(void) {
+    kernel_panic("Manual panic requested", "Triggered from shell command.");
+}
+
 static void byte_to_hex(unsigned char byte, char* buf) {
     const char hex_chars[] = "0123456789ABCDEF";
     buf[0] = hex_chars[(byte >> 4) & 0xF];
@@ -1448,6 +1452,7 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
             "neofetch - system info\n"
             "basic - BASIC interpreter\n"
             "exec <file.bas> - run BASIC file\n"
+            "panic - show kernel panic screen\n"
             "halt - shutdown\n"
             "reboot - restart\n",
             -1, video, cursor, COLOR_LIGHT_CYAN);
@@ -1519,6 +1524,8 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
         handle_syscalltest_command(video, cursor);
     } else if (mini_strcmp(cmd, "halt") == 0) {
         handle_halt_command(video, cursor);
+    } else if (mini_strcmp(cmd, "panic") == 0) {
+        handle_panic_command();
     } else if (mini_strcmp(cmd, "reboot") == 0) {
         handle_reboot_command();
     } else if (mini_strcmp(cmd,"filesize")==0){
@@ -1550,7 +1557,7 @@ void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* v
     const char* commands[] = {
         "ls", "cd", "pwd", "cat", "mkdir", "rmdir", "rm", "touch", "cp", "mv",
         "echo", "edit", "tree", "grep", "clear", "cls", "help", "time", "ping", "exec",
-        "about", "ver", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "filesize", "neofetch", "basic", "syscalltest", "spawn", "ps", "kill", "wait"
+        "about", "ver", "panic", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "filesize", "neofetch", "basic", "syscalltest", "spawn", "ps", "kill", "wait"
     };
     int cmd_count = (int)(sizeof(commands) / sizeof(commands[0]));
     

@@ -247,6 +247,11 @@ int mini_strcmp(const char* a, const char* b);
 void int_to_str(int value, char* buf);
 void str_concat(char* dest, const char* src);
 
+// Panic handling
+void kernel_panic(const char* reason, const char* detail);
+void exception_handler(unsigned int vector, unsigned int error_code, unsigned int eip, unsigned int cs, unsigned int eflags);
+extern void (*exception_stub_table[32])(void);
+
 // Display
 void scroll_screen(char* video);
 void print_string(const char* str, int len, char* video, int* cursor, unsigned char color);
