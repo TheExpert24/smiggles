@@ -4,11 +4,13 @@
 
 [GLOBAL irq0_timer_handler]
 [GLOBAL irq1_keyboard_handler]
+[GLOBAL irq12_mouse_handler]
 [GLOBAL isr_syscall_handler]
 [GLOBAL load_idt]
 
 [EXTERN timer_handler]
 [EXTERN keyboard_handler]
+[EXTERN mouse_handler]
 [EXTERN syscall_dispatch]
 
 _start:
@@ -28,6 +30,13 @@ irq0_timer_handler:
 irq1_keyboard_handler:
     pusha
     call keyboard_handler
+    popa
+    iretd
+
+; Mouse IRQ12 handler stub
+irq12_mouse_handler:
+    pusha
+    call mouse_handler
     popa
     iretd
 

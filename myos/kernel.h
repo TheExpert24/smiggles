@@ -185,6 +185,12 @@ extern int tab_completion_position;
 extern int tab_match_count;
 extern char tab_matches[32][32];
 
+typedef struct {
+    int col;
+    int row;
+    int wheel_delta;
+} MouseState;
+
 // --- Function Declarations ---
 
 // Memory management
@@ -203,10 +209,15 @@ void set_idt_entry(int n, unsigned int handler);
 void set_idt_entry_user(int n, unsigned int handler);
 void timer_handler(void);
 void keyboard_handler(void);
+void mouse_handler(void);
 int keyboard_pop_scancode(unsigned char* out_scancode);
+void mouse_init(void);
+void mouse_poll_hardware(void);
+int mouse_poll_state(MouseState* state);
 extern void load_idt(void*);
 extern void irq0_timer_handler();
 extern void irq1_keyboard_handler();
+extern void irq12_mouse_handler();
 extern void isr_syscall_handler();
 
 // Syscalls
@@ -243,6 +254,14 @@ void print_string_sameline(const char* str, int len, char* video, int* cursor, u
 void print_smiggles_art(char* video, int* cursor);
 void set_cursor_position(int cursor);
 char scancode_to_char(unsigned char scancode, int shift);
+void display_init(char* video);
+void display_hide_mouse(char* video);
+void display_refresh_mouse(char* video);
+void display_set_mouse_position(int col, int row);
+int display_scroll_view(int delta, char* video);
+int display_is_scrollback_active(void);
+void display_sync_live_screen(char* video);
+void display_restore_live_screen(char* video);
 
 // Editor
 void nano_editor(const char* filename, char* video, int* cursor);

@@ -221,15 +221,17 @@ void kernel_main(void) {
     pic_remap();
     set_idt_entry(0x20, (unsigned int)irq0_timer_handler);
     set_idt_entry(0x21, (unsigned int)irq1_keyboard_handler);
+    set_idt_entry(0x2C, (unsigned int)irq12_mouse_handler);
     set_idt_entry_user(0x80, (unsigned int)isr_syscall_handler);
-    // Unmask IRQ0 (timer) and IRQ1 (keyboard)
-    asm volatile("outb %0, %1" : : "a"((unsigned char)0xFC), "Nd"((uint16_t)PIC1_DATA));
-    asm volatile("outb %0, %1" : : "a"((unsigned char)0xFF), "Nd"((uint16_t)PIC2_DATA));
+    // Unmask IRQ0 (timer), IRQ1 (keyboard), IRQ2 (cascade), and IRQ12 (mouse)
+    asm volatile("outb %0, %1" : : "a"((unsigned char)0xF8), "Nd"((uint16_t)PIC1_DATA));
+    asm volatile("outb %0, %1" : : "a"((unsigned char)0xEF), "Nd"((uint16_t)PIC2_DATA));
     extern struct IDT_ptr idt_ptr;
     extern struct IDT_entry idt[256];
     idt_ptr.limit = sizeof(idt) - 1;
     idt_ptr.base = (unsigned int)&idt;
     load_idt(&idt_ptr);
+    mouse_init();
     asm volatile("sti");
     char* video = (char*)0xB8000;
     int cursor = 0;
@@ -244,6 +246,7 @@ void kernel_main(void) {
         video[i] = ' ';
         video[i+1] = 0x07;
     }
+    display_init(video);
 
     //introductory message
     print_smiggles_art(video, &cursor);
@@ -274,26 +277,52 @@ void kernel_main(void) {
     asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0B), "Nd"((unsigned short)0x3D4));
     asm volatile ("outb %0, %1" : : "a"((unsigned char)15), "Nd"((unsigned short)0x3D5));
 
+    display_set_mouse_position(40, 12);
+    display_sync_live_screen(video);
+    display_refresh_mouse(video);
+
     // Continue with normal kernel loop
     while (1) {
+        MouseState mouse_state;
         unsigned char scancode;
+
+        mouse_poll_hardware();
+
+        if (mouse_poll_state(&mouse_state)) {
+            display_hide_mouse(video);
+            if (mouse_state.wheel_delta != 0) {
+                display_scroll_view(mouse_state.wheel_delta, video);
+            }
+            display_set_mouse_position(mouse_state.col, mouse_state.row);
+            display_sync_live_screen(video);
+            display_refresh_mouse(video);
+        }
+
         if (!keyboard_pop_scancode(&scancode)) {
             continue;
+        }
+
+        display_hide_mouse(video);
+        if (display_is_scrollback_active()) {
+            display_restore_live_screen(video);
         }
 
         //SHIFT KEYS
         if (scancode == 0x2A || scancode == 0x36) { 
             shift = 1;
+            display_refresh_mouse(video);
             continue;
         }
         if (scancode == 0xAA || scancode == 0xB6) { 
             shift = 0;
+            display_refresh_mouse(video);
             continue;
         }
 
         // Handle E0 prefix for extended keys (arrow keys, etc.)
         if (scancode == 0xE0) {
             e0_prefix_pending = 1;
+            display_refresh_mouse(video);
             continue;
         }
 
@@ -302,18 +331,23 @@ void kernel_main(void) {
 
         // Ignore release codes for E0-prefixed keys
         if (e0_prefix && (scancode & 0x80)) {
+            display_refresh_mouse(video);
             continue;
         }
 
         // Filter out release codes for non-E0 keys
         if (!e0_prefix && scancode > 0x80) {
             prev_scancode = 0;
+            display_refresh_mouse(video);
             continue;
         }
         
         // For arrow keys, don't check prev_scancode to allow repeated presses
         if (!e0_prefix) {
-            if (scancode == prev_scancode || scancode == 0) continue;
+            if (scancode == prev_scancode || scancode == 0) {
+                display_refresh_mouse(video);
+                continue;
+            }
             prev_scancode = scancode;
         }
 
@@ -350,6 +384,7 @@ void kernel_main(void) {
                     cursor--;
                     set_cursor_position(cursor);
                 }
+                display_refresh_mouse(video);
                 continue;
             } else if (scancode == 0x4D) { // Right arrow
                 if (tab_completion_active && tab_completion_position < tab_match_count - 1) {
@@ -381,6 +416,7 @@ void kernel_main(void) {
                     cursor++;
                     set_cursor_position(cursor);
                 }
+                display_refresh_mouse(video);
                 continue;
             } else if (scancode == 0x48) { // Up arrow
                 if (history_count > 0) {
@@ -410,6 +446,7 @@ void kernel_main(void) {
                     
                     set_cursor_position(cursor);
                 }
+                display_refresh_mouse(video);
                 continue;
             } else if (scancode == 0x50) { // Down arrow
                 if (history_position != -1) {
@@ -442,9 +479,11 @@ void kernel_main(void) {
                     
                     set_cursor_position(cursor);
                 }
+                display_refresh_mouse(video);
                 continue;
             }
             else {
+                display_refresh_mouse(video);
                 continue; // Ignore other E0 keys
             }
         }
@@ -569,5 +608,8 @@ void kernel_main(void) {
                 }
             }
         }
+
+        display_sync_live_screen(video);
+        display_refresh_mouse(video);
     }
 }
