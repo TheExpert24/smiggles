@@ -1,5 +1,251 @@
 #include "kernel.h"
 
+static void panic_clear_screen(char* video, unsigned char color) {
+    for (int i = 0; i < 80 * 25 * 2; i += 2) {
+        video[i] = ' ';
+        video[i + 1] = color;
+    }
+}
+
+static void panic_write_at(char* video, int row, int col, const char* text, unsigned char color) {
+    int index = 0;
+    int cell = row * 80 + col;
+
+    if (!text || row < 0 || row >= 25 || col < 0 || col >= 80) return;
+
+    while (text[index] && (col + index) < 80) {
+        video[(cell + index) * 2] = text[index];
+        video[(cell + index) * 2 + 1] = color;
+        index++;
+    }
+}
+
+static void panic_append_dec(char* buf, int value) {
+    char temp[16];
+    int_to_str(value, temp);
+    str_concat(buf, temp);
+}
+
+static void panic_clear_line(char* video, int row, unsigned char color) {
+    if (row < 0 || row >= 25) return;
+    for (int col = 0; col < 80; col++) {
+        int offset = (row * 80 + col) * 2;
+        video[offset] = ' ';
+        video[offset + 1] = color;
+    }
+}
+
+static void panic_hide_mouse(char* video, int* visible, int* saved_offset, char* saved_char, unsigned char* saved_attr) {
+    if (!*visible || *saved_offset < 0) return;
+    video[*saved_offset] = *saved_char;
+    video[*saved_offset + 1] = *saved_attr;
+    *visible = 0;
+    *saved_offset = -1;
+}
+
+static void panic_draw_mouse(char* video, int col, int row, int* visible, int* saved_offset, char* saved_char, unsigned char* saved_attr) {
+    int offset;
+
+    if (col < 0) col = 0;
+    if (col > 79) col = 79;
+    if (row < 0) row = 0;
+    if (row > 24) row = 24;
+
+    offset = (row * 80 + col) * 2;
+    *saved_char = video[offset];
+    *saved_attr = (unsigned char)video[offset + 1];
+    *saved_offset = offset;
+    video[offset] = 'X';
+    video[offset + 1] = COLOR_LIGHT_CYAN;
+    *visible = 1;
+}
+
+static void panic_reboot(void) {
+    asm volatile("cli");
+    outb(0x64, 0xFE);
+    while (1) {
+        asm volatile("hlt");
+    }
+}
+
+static void panic_poweroff(void) {
+    asm volatile("outw %0, %1" : : "a"((unsigned short)0x2000), "Nd"((unsigned short)0x604));
+    while (1) {
+        asm volatile("hlt");
+    }
+}
+
+static void panic_command_loop(char* video) {
+    char cmd[16];
+    int cmd_len = 0;
+    int shift = 0;
+    int e0_prefix = 0;
+    int mouse_col = 40;
+    int mouse_row = 12;
+    int mouse_visible = 0;
+    int mouse_saved_offset = -1;
+    char mouse_saved_char = ' ';
+    unsigned char mouse_saved_attr = COLOR_LIGHT_RED;
+    MouseState mouse_state;
+
+    panic_write_at(video, 18, 2, "Type 'reboot' or 'halt' and press Enter.", COLOR_WHITE);
+    panic_write_at(video, 20, 2, "> ", COLOR_YELLOW);
+    panic_draw_mouse(video, mouse_col, mouse_row, &mouse_visible, &mouse_saved_offset, &mouse_saved_char, &mouse_saved_attr);
+    set_cursor_position(20 * 80 + 4);
+
+    while (1) {
+        mouse_poll_hardware();
+        if (mouse_poll_state(&mouse_state)) {
+            panic_hide_mouse(video, &mouse_visible, &mouse_saved_offset, &mouse_saved_char, &mouse_saved_attr);
+            mouse_col = mouse_state.col;
+            mouse_row = mouse_state.row;
+            panic_draw_mouse(video, mouse_col, mouse_row, &mouse_visible, &mouse_saved_offset, &mouse_saved_char, &mouse_saved_attr);
+            set_cursor_position(20 * 80 + 4 + cmd_len);
+        }
+
+        unsigned char status = inb(0x64);
+        if ((status & 0x01) == 0) {
+            continue;
+        }
+
+        if (status & 0x20) {
+            mouse_poll_hardware();
+            if (mouse_poll_state(&mouse_state)) {
+                panic_hide_mouse(video, &mouse_visible, &mouse_saved_offset, &mouse_saved_char, &mouse_saved_attr);
+                mouse_col = mouse_state.col;
+                mouse_row = mouse_state.row;
+                panic_draw_mouse(video, mouse_col, mouse_row, &mouse_visible, &mouse_saved_offset, &mouse_saved_char, &mouse_saved_attr);
+                set_cursor_position(20 * 80 + 4 + cmd_len);
+            }
+            continue;
+        }
+
+        unsigned char scancode = inb(0x60);
+
+        if (scancode == 0xE0) {
+            e0_prefix = 1;
+            continue;
+        }
+
+        if (scancode == 0x2A || scancode == 0x36) {
+            shift = 1;
+            continue;
+        }
+        if (scancode == 0xAA || scancode == 0xB6) {
+            shift = 0;
+            continue;
+        }
+
+        if (e0_prefix) {
+            e0_prefix = 0;
+            continue;
+        }
+
+        if (scancode & 0x80) {
+            continue;
+        }
+
+        {
+            char c = scancode_to_char(scancode, shift);
+            if (!c) continue;
+
+            panic_hide_mouse(video, &mouse_visible, &mouse_saved_offset, &mouse_saved_char, &mouse_saved_attr);
+
+            if (c == 8) {
+                if (cmd_len > 0) {
+                    cmd_len--;
+                    cmd[cmd_len] = 0;
+                    panic_write_at(video, 20, 4 + cmd_len, " ", COLOR_WHITE);
+                    set_cursor_position(20 * 80 + 4 + cmd_len);
+                }
+                panic_draw_mouse(video, mouse_col, mouse_row, &mouse_visible, &mouse_saved_offset, &mouse_saved_char, &mouse_saved_attr);
+                set_cursor_position(20 * 80 + 4 + cmd_len);
+                continue;
+            }
+
+            if (c == '\n') {
+                cmd[cmd_len] = 0;
+
+                if (mini_strcmp(cmd, "reboot") == 0) {
+                    panic_reboot();
+                }
+                if (mini_strcmp(cmd, "halt") == 0) {
+                    panic_poweroff();
+                }
+
+                panic_clear_line(video, 22, COLOR_LIGHT_RED);
+                panic_write_at(video, 22, 2, "Unknown command. Use 'reboot' or 'halt'.", COLOR_YELLOW);
+                panic_clear_line(video, 20, COLOR_LIGHT_RED);
+                panic_write_at(video, 20, 2, "> ", COLOR_YELLOW);
+                cmd_len = 0;
+                cmd[0] = 0;
+                panic_draw_mouse(video, mouse_col, mouse_row, &mouse_visible, &mouse_saved_offset, &mouse_saved_char, &mouse_saved_attr);
+                set_cursor_position(20 * 80 + 4);
+                continue;
+            }
+
+            if (c >= 32 && c <= 126 && cmd_len < (int)sizeof(cmd) - 1) {
+                cmd[cmd_len++] = c;
+                cmd[cmd_len] = 0;
+                {
+                    char out[2];
+                    out[0] = c;
+                    out[1] = 0;
+                    panic_write_at(video, 20, 3 + cmd_len, out, COLOR_WHITE);
+                }
+                panic_draw_mouse(video, mouse_col, mouse_row, &mouse_visible, &mouse_saved_offset, &mouse_saved_char, &mouse_saved_attr);
+                set_cursor_position(20 * 80 + 4 + cmd_len);
+            } else {
+                panic_draw_mouse(video, mouse_col, mouse_row, &mouse_visible, &mouse_saved_offset, &mouse_saved_char, &mouse_saved_attr);
+                set_cursor_position(20 * 80 + 4 + cmd_len);
+            }
+        }
+    }
+}
+
+void kernel_panic(const char* reason, const char* detail) {
+    char* video = (char*)0xB8000;
+    char buf[64];
+
+    asm volatile("cli");
+
+    panic_clear_screen(video, COLOR_LIGHT_RED);
+
+    panic_write_at(video, 1, 2, "---CRASHY SCREEN---", COLOR_WHITE);
+    panic_write_at(video, 3, 2, "The system encountered a fatal error and was stopped.", COLOR_WHITE);
+
+    if (reason && reason[0]) {
+        panic_write_at(video, 5, 2, "Reason:", COLOR_YELLOW);
+        panic_write_at(video, 6, 4, reason, COLOR_WHITE);
+    }
+
+    if (detail && detail[0]) {
+        panic_write_at(video, 8, 2, "Detail:", COLOR_YELLOW);
+        panic_write_at(video, 9, 4, detail, COLOR_WHITE);
+    }
+
+    buf[0] = 0;
+    str_concat(buf, "Ticks: ");
+    panic_append_dec(buf, ticks);
+    panic_write_at(video, 11, 2, buf, COLOR_LIGHT_CYAN);
+
+    buf[0] = 0;
+    str_concat(buf, "Current process: ");
+    panic_append_dec(buf, current_process);
+    panic_write_at(video, 12, 2, buf, COLOR_LIGHT_CYAN);
+
+    buf[0] = 0;
+    str_concat(buf, "Last key/scancode: ");
+    panic_append_dec(buf, (unsigned char)last_key);
+    panic_write_at(video, 13, 2, buf, COLOR_LIGHT_CYAN);
+
+    panic_write_at(video, 15, 2, "System halted. Reboot required.", COLOR_YELLOW);
+
+    set_cursor_position(0);
+
+    panic_command_loop(video);
+}
+
 static int fs_state_is_valid(void) {
     if (!node_table[0].used) return 0;
     if (node_table[0].type != NODE_DIRECTORY) return 0;
@@ -219,6 +465,9 @@ void kernel_main(void) {
 
     // --- Interrupt setup ---
     pic_remap();
+    for (int vector = 0; vector < 32; vector++) {
+        set_idt_entry(vector, (unsigned int)exception_stub_table[vector]);
+    }
     set_idt_entry(0x20, (unsigned int)irq0_timer_handler);
     set_idt_entry(0x21, (unsigned int)irq1_keyboard_handler);
     set_idt_entry(0x2C, (unsigned int)irq12_mouse_handler);
@@ -344,7 +593,7 @@ void kernel_main(void) {
         
         // For arrow keys, don't check prev_scancode to allow repeated presses
         if (!e0_prefix) {
-            if (scancode == prev_scancode || scancode == 0) {
+            if ((scancode == prev_scancode && scancode != 0x0E) || scancode == 0) {
                 display_refresh_mouse(video);
                 continue;
             }
