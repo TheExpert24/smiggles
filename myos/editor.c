@@ -24,6 +24,45 @@ static void logical_pos_for_index(const char* buf, int index, int* out_row, int*
     *out_col = col;
 }
 
+static int logical_index_for_position(const char* buf, int len, int target_row, int target_col) {
+    int row = 0;
+    int col = 0;
+
+    if (target_row < 0) return 0;
+    if (target_col < 0) target_col = 0;
+
+    for (int i = 0; i < len; i++) {
+        if (row == target_row) {
+            if (col == target_col) {
+                return i;
+            }
+            if (buf[i] == '\n') {
+                return i;
+            }
+        }
+
+        if (buf[i] == '\n') {
+            row++;
+            col = 0;
+        } else {
+            col++;
+            if (col >= EDIT_COLS) {
+                if (row == target_row) {
+                    return i + 1;
+                }
+                row++;
+                col = 0;
+            }
+        }
+    }
+
+    if (row == target_row) {
+        return len;
+    }
+
+    return len;
+}
+
 static void render_editor_view(const char* buf, int len, char* video, int edit_start, int view_top_row) {
     char desired_chars[EDIT_ROWS * EDIT_COLS];
     unsigned char desired_attrs[EDIT_ROWS * EDIT_COLS];
@@ -93,21 +132,22 @@ void nano_editor(const char* filename, char* video, int* cursor) {
     char prev_screen[80*25*2];
     for (int i = 0; i < 80*25*2; ++i) prev_screen[i] = video[i];
     int prev_cursor = *cursor;
-    int pos = node_table[node_idx].content_size;
-    if (pos < 0 || pos > MAX_FILE_CONTENT - 1) pos = 0;
+    int len = node_table[node_idx].content_size;
+    if (len < 0 || len > MAX_FILE_CONTENT - 1) len = 0;
+    int cursor_index = len;
     int editing = 1;
     int maxlen = MAX_FILE_CONTENT - 1;
-    if (pos > maxlen) {
+    if (len > maxlen) {
         print_string("Error: file too long, not saved", -1, video, cursor, COLOR_RED);
         // Remove the file
         node_table[node_idx].used = 0;
         fs_save();
         return;
     }
-    for (int i = 0; i < pos; i++) {
+    for (int i = 0; i < len; i++) {
         editor_work_buf[i] = node_table[node_idx].content[i];
     }
-    editor_work_buf[pos] = 0;
+    editor_work_buf[len] = 0;
     char* buf = editor_work_buf;
     
     for (int i = 0; i < 80 * 25 * 2; i += 2) {
@@ -121,7 +161,7 @@ void nano_editor(const char* filename, char* video, int* cursor) {
     int logical_row = 0, logical_col = 0;
     int draw_cursor = edit_start;
     int cursor_row = 0, cursor_col = 0;
-    for (int i = 0; i < pos && draw_cursor < 80*25; i++) {
+    for (int i = 0; i < len && draw_cursor < 80*25; i++) {
         if (buf[i] == '\n') {
             logical_row++;
             logical_col = 0;
@@ -132,7 +172,7 @@ void nano_editor(const char* filename, char* video, int* cursor) {
             draw_cursor++;
             logical_col++;
         }
-        if (i == pos - 1) {
+        if (i == cursor_index - 1) {
             cursor_row = logical_row;
             cursor_col = logical_col;
         }
@@ -147,11 +187,11 @@ void nano_editor(const char* filename, char* video, int* cursor) {
     int view_top_row = 0;
     int initial_row = 0;
     int initial_col = 0;
-    logical_pos_for_index(buf, pos, &initial_row, &initial_col);
+    logical_pos_for_index(buf, cursor_index, &initial_row, &initial_col);
     if (initial_row >= EDIT_ROWS) {
         view_top_row = initial_row - EDIT_ROWS + 1;
     }
-    render_editor_view(buf, pos, video, edit_start, view_top_row);
+    render_editor_view(buf, len, video, edit_start, view_top_row);
     int initial_screen_row = initial_row - view_top_row;
     int initial_pos = edit_start + initial_screen_row * EDIT_COLS + initial_col;
     if (initial_pos >= 80*25) initial_pos = 80*25 - 1;
@@ -160,6 +200,7 @@ void nano_editor(const char* filename, char* video, int* cursor) {
     
     int shift = 0, ctrl = 0;
     unsigned char prev_scancode = 0;
+    int e0_prefix_pending = 0;
     int exit_code = 0;
     
     while (editing) {
@@ -167,19 +208,68 @@ void nano_editor(const char* filename, char* video, int* cursor) {
         if (!keyboard_pop_scancode(&scancode)) {
             continue;
         }
+        if (scancode == 0xE0) {
+            e0_prefix_pending = 1;
+            continue;
+        }
         if (scancode & 0x80) {
             if (scancode == 0xAA || scancode == 0xB6) shift = 0;
             if (scancode == 0x9D) ctrl = 0;
             prev_scancode = 0;
+            e0_prefix_pending = 0;
             continue;
         }
+
+        if (e0_prefix_pending) {
+            int cur_row = 0;
+            int cur_col = 0;
+            int max_row = 0;
+            int max_col = 0;
+
+            e0_prefix_pending = 0;
+            logical_pos_for_index(buf, cursor_index, &cur_row, &cur_col);
+            logical_pos_for_index(buf, len, &max_row, &max_col);
+
+            if (scancode == 0x4B) {
+                if (cursor_index > 0) cursor_index--;
+            } else if (scancode == 0x4D) {
+                if (cursor_index < len) cursor_index++;
+            } else if (scancode == 0x48) {
+                if (cur_row > 0) {
+                    cursor_index = logical_index_for_position(buf, len, cur_row - 1, cur_col);
+                }
+            } else if (scancode == 0x50) {
+                if (cur_row < max_row) {
+                    cursor_index = logical_index_for_position(buf, len, cur_row + 1, cur_col);
+                }
+            }
+
+            logical_pos_for_index(buf, cursor_index, &cur_row, &cur_col);
+            if (cur_row < view_top_row) {
+                view_top_row = cur_row;
+            } else if (cur_row >= view_top_row + EDIT_ROWS) {
+                view_top_row = cur_row - EDIT_ROWS + 1;
+            }
+
+            render_editor_view(buf, len, video, edit_start, view_top_row);
+
+            int screen_row = cur_row - view_top_row;
+            if (screen_row < 0) screen_row = 0;
+            if (screen_row >= EDIT_ROWS) screen_row = EDIT_ROWS - 1;
+
+            *cursor = edit_start + screen_row * EDIT_COLS + cur_col;
+            if (*cursor >= 80*25) *cursor = 80*25 - 1;
+            set_cursor_position(*cursor);
+            continue;
+        }
+
         if ((scancode == prev_scancode && scancode != 0x0E) || scancode == 0) continue;
         prev_scancode = scancode;
         if (scancode == 0x2A || scancode == 0x36) { shift = 1; continue; }
         if (scancode == 0x1D) { ctrl = 1; continue; }
         if (ctrl && scancode == 0x1F) { // Ctrl+S: Save
-            if (pos < 0) pos = 0;
-            if (pos > maxlen) {
+            if (len < 0) len = 0;
+            if (len > maxlen) {
                 print_string("Error: file too long, not saved", -1, video, cursor, COLOR_RED);
                 node_table[node_idx].used = 0;
                 fs_save();
@@ -193,11 +283,11 @@ void nano_editor(const char* filename, char* video, int* cursor) {
                 exit_code = 2;
                 break;
             }
-            buf[pos] = 0;
-            for (int i = 0; i <= pos; i++) {
+            buf[len] = 0;
+            for (int i = 0; i <= len; i++) {
                 node_table[node_idx].content[i] = buf[i];
             }
-            node_table[node_idx].content_size = pos;
+            node_table[node_idx].content_size = len;
             fs_save();
             while (1) {
                 unsigned char sc;
@@ -220,21 +310,38 @@ void nano_editor(const char* filename, char* video, int* cursor) {
             exit_code = 2;
             break;
         }
-        if (scancode == 0x1C && pos < maxlen) {
-            buf[pos++] = '\n';
+        if (scancode == 0x1C && len < maxlen) {
+            for (int i = len; i > cursor_index; i--) {
+                buf[i] = buf[i - 1];
+            }
+            buf[cursor_index] = '\n';
+            len++;
+            cursor_index++;
+            buf[len] = 0;
         }
-        else if (scancode == 0x0E && pos > 0) {
-            pos--;
+        else if (scancode == 0x0E && cursor_index > 0 && len > 0) {
+            for (int i = cursor_index - 1; i < len - 1; i++) {
+                buf[i] = buf[i + 1];
+            }
+            len--;
+            cursor_index--;
+            buf[len] = 0;
         }
         else if (scancode < 128) {
             char c = scancode_to_char(scancode, shift);
-            if (c && pos < maxlen) {
-                buf[pos++] = c;
+            if (c && c != 8 && len < maxlen) {
+                for (int i = len; i > cursor_index; i--) {
+                    buf[i] = buf[i - 1];
+                }
+                buf[cursor_index] = c;
+                len++;
+                cursor_index++;
+                buf[len] = 0;
             }
         }
         int cur_row = 0;
         int cur_col = 0;
-        logical_pos_for_index(buf, pos, &cur_row, &cur_col);
+        logical_pos_for_index(buf, cursor_index, &cur_row, &cur_col);
 
         if (cur_row < view_top_row) {
             view_top_row = cur_row;
@@ -242,7 +349,7 @@ void nano_editor(const char* filename, char* video, int* cursor) {
             view_top_row = cur_row - EDIT_ROWS + 1;
         }
 
-        render_editor_view(buf, pos, video, edit_start, view_top_row);
+        render_editor_view(buf, len, video, edit_start, view_top_row);
 
         int screen_row = cur_row - view_top_row;
         if (screen_row < 0) screen_row = 0;
