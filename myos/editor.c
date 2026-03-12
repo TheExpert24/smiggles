@@ -3,6 +3,8 @@
 #define EDIT_ROWS 22
 #define EDIT_COLS 80
 
+static char editor_work_buf[MAX_FILE_CONTENT];
+
 static void logical_pos_for_index(const char* buf, int index, int* out_row, int* out_col) {
     int row = 0;
     int col = 0;
@@ -87,7 +89,6 @@ void nano_editor(const char* filename, char* video, int* cursor) {
             return;
         }
     }
-    char* buf = node_table[node_idx].content;
     // Save the current screen and cursor
     char prev_screen[80*25*2];
     for (int i = 0; i < 80*25*2; ++i) prev_screen[i] = video[i];
@@ -103,6 +104,11 @@ void nano_editor(const char* filename, char* video, int* cursor) {
         fs_save();
         return;
     }
+    for (int i = 0; i < pos; i++) {
+        editor_work_buf[i] = node_table[node_idx].content[i];
+    }
+    editor_work_buf[pos] = 0;
+    char* buf = editor_work_buf;
     
     for (int i = 0; i < 80 * 25 * 2; i += 2) {
         video[i] = ' ';
@@ -161,13 +167,14 @@ void nano_editor(const char* filename, char* video, int* cursor) {
         if (!keyboard_pop_scancode(&scancode)) {
             continue;
         }
-        if (scancode == prev_scancode || scancode == 0) continue;
-        prev_scancode = scancode;
         if (scancode & 0x80) {
             if (scancode == 0xAA || scancode == 0xB6) shift = 0;
             if (scancode == 0x9D) ctrl = 0;
+            prev_scancode = 0;
             continue;
         }
+        if ((scancode == prev_scancode && scancode != 0x0E) || scancode == 0) continue;
+        prev_scancode = scancode;
         if (scancode == 0x2A || scancode == 0x36) { shift = 1; continue; }
         if (scancode == 0x1D) { ctrl = 1; continue; }
         if (ctrl && scancode == 0x1F) { // Ctrl+S: Save
@@ -187,6 +194,9 @@ void nano_editor(const char* filename, char* video, int* cursor) {
                 break;
             }
             buf[pos] = 0;
+            for (int i = 0; i <= pos; i++) {
+                node_table[node_idx].content[i] = buf[i];
+            }
             node_table[node_idx].content_size = pos;
             fs_save();
             while (1) {
@@ -214,9 +224,7 @@ void nano_editor(const char* filename, char* video, int* cursor) {
             buf[pos++] = '\n';
         }
         else if (scancode == 0x0E && pos > 0) {
-            if (pos > 0) {
-                pos--;
-            }
+            pos--;
         }
         else if (scancode < 128) {
             char c = scancode_to_char(scancode, shift);
