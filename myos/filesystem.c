@@ -190,6 +190,147 @@ RamDir dir_table[MAX_DIRS] = { {"root", 1, -1} };
 int dir_count = 1;
 int current_dir = 0;
 
+#define MAX_OPEN_FDS 64
+
+typedef struct {
+    int used;
+    int node_idx;
+    int offset;
+    int flags;
+    int owner_pid;
+} KernelFD;
+
+static KernelFD fd_table[MAX_OPEN_FDS];
+
+void fs_fd_init(void) {
+    for (int i = 0; i < MAX_OPEN_FDS; i++) {
+        fd_table[i].used = 0;
+        fd_table[i].node_idx = -1;
+        fd_table[i].offset = 0;
+        fd_table[i].flags = 0;
+        fd_table[i].owner_pid = -1;
+    }
+}
+
+static int fs_fd_is_valid(int fd) {
+    if (fd < 0 || fd >= MAX_OPEN_FDS) return 0;
+    if (!fd_table[fd].used) return 0;
+    int node_idx = fd_table[fd].node_idx;
+    if (node_idx < 0 || node_idx >= MAX_NODES) return 0;
+    if (!node_table[node_idx].used || node_table[node_idx].type != NODE_FILE) return 0;
+    return 1;
+}
+
+int fs_fd_open(const char* path, int flags) {
+    if (!path || path[0] == 0) return -1;
+    if ((flags & (FS_O_READ | FS_O_WRITE)) == 0) return -2;
+
+    int node_idx = resolve_path(path);
+    if (node_idx == -1) {
+        if (!(flags & FS_O_CREATE)) return -3;
+        node_idx = fs_touch(path, "");
+        if (node_idx < 0) return -4;
+    }
+
+    if (!node_table[node_idx].used || node_table[node_idx].type != NODE_FILE) return -5;
+
+    if ((flags & FS_O_TRUNC) && (flags & FS_O_WRITE)) {
+        node_table[node_idx].content[0] = 0;
+        node_table[node_idx].content_size = 0;
+        fs_save();
+    }
+
+    int fd = -1;
+    for (int i = 0; i < MAX_OPEN_FDS; i++) {
+        if (!fd_table[i].used) {
+            fd = i;
+            break;
+        }
+    }
+    if (fd < 0) return -6;
+
+    fd_table[fd].used = 1;
+    fd_table[fd].node_idx = node_idx;
+    fd_table[fd].flags = flags;
+    fd_table[fd].owner_pid = current_process;
+    if (flags & FS_O_APPEND) fd_table[fd].offset = node_table[node_idx].content_size;
+    else fd_table[fd].offset = 0;
+
+    return fd;
+}
+
+int fs_fd_close(int fd) {
+    if (fd < 0 || fd >= MAX_OPEN_FDS) return -1;
+    if (!fd_table[fd].used) return -2;
+
+    fd_table[fd].used = 0;
+    fd_table[fd].node_idx = -1;
+    fd_table[fd].offset = 0;
+    fd_table[fd].flags = 0;
+    fd_table[fd].owner_pid = -1;
+    return 0;
+}
+
+int fs_fd_read(int fd, char* buffer, int count) {
+    if (!buffer || count < 0) return -1;
+    if (!fs_fd_is_valid(fd)) return -2;
+    if (!(fd_table[fd].flags & FS_O_READ)) return -3;
+
+    int node_idx = fd_table[fd].node_idx;
+    int offset = fd_table[fd].offset;
+    int available = node_table[node_idx].content_size - offset;
+    if (available <= 0) return 0;
+
+    int to_copy = count;
+    if (to_copy > available) to_copy = available;
+    for (int i = 0; i < to_copy; i++) {
+        buffer[i] = node_table[node_idx].content[offset + i];
+    }
+    fd_table[fd].offset = offset + to_copy;
+    return to_copy;
+}
+
+int fs_fd_write(int fd, const char* buffer, int count) {
+    if (!buffer || count < 0) return -1;
+    if (!fs_fd_is_valid(fd)) return -2;
+    if (!(fd_table[fd].flags & FS_O_WRITE)) return -3;
+
+    int node_idx = fd_table[fd].node_idx;
+    int offset = fd_table[fd].offset;
+    if (fd_table[fd].flags & FS_O_APPEND) {
+        offset = node_table[node_idx].content_size;
+        fd_table[fd].offset = offset;
+    }
+
+    if (offset < 0 || offset >= MAX_FILE_CONTENT - 1) return 0;
+
+    int writable = (MAX_FILE_CONTENT - 1) - offset;
+    int to_copy = count;
+    if (to_copy > writable) to_copy = writable;
+
+    for (int i = 0; i < to_copy; i++) {
+        node_table[node_idx].content[offset + i] = buffer[i];
+    }
+
+    int end = offset + to_copy;
+    if (end > node_table[node_idx].content_size) {
+        node_table[node_idx].content_size = end;
+    }
+    node_table[node_idx].content[node_table[node_idx].content_size] = 0;
+    fd_table[fd].offset = end;
+    fs_save();
+    return to_copy;
+}
+
+void fs_fd_close_for_pid(int pid) {
+    for (int i = 0; i < MAX_OPEN_FDS; i++) {
+        if (!fd_table[i].used) continue;
+        if (fd_table[i].owner_pid == pid) {
+            fs_fd_close(i);
+        }
+    }
+}
+
 // --- String Utilities ---
 int str_len(const char* s) {
     int len = 0;
@@ -245,6 +386,8 @@ void str_concat(char* dest, const char* src) {
 }
 
 void init_filesystem() {
+    fs_fd_init();
+
     for (int i = 0; i < MAX_NODES; i++) {
         node_table[i].used = 0;
         node_table[i].child_count = 0;
@@ -651,6 +794,8 @@ void fs_save() {
 }
 
 void fs_load() {
+    fs_fd_init();
+
     uint32_t best_generation = 0;
     int best_slot = -1;
     for (int slot = 0; slot < FS_SLOT_COUNT; slot++) {

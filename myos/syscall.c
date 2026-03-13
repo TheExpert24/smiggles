@@ -1,14 +1,6 @@
 #include "kernel.h"
 
-#define SYS_YIELD      0u
-#define SYS_GET_TICKS  1u
-#define SYS_GET_PID    2u
-#define SYS_WAIT_TICKS 3u
-#define SYS_SPAWN_DEMO 4u
-#define SYS_KILL_PID   5u
-#define SYS_GET_CPL    6u
-
-unsigned int syscall_dispatch(unsigned int number, unsigned int arg0) {
+unsigned int syscall_dispatch(unsigned int number, unsigned int arg0, unsigned int arg1, unsigned int arg2) {
     switch (number) {
         case SYS_YIELD:
             process_yield();
@@ -31,6 +23,14 @@ unsigned int syscall_dispatch(unsigned int number, unsigned int arg0) {
             return (unsigned int)process_kill((int)arg0);
         case SYS_GET_CPL:
             return protection_get_cpl();
+        case SYS_OPEN:
+            return (unsigned int)fs_fd_open((const char*)arg0, (int)arg1);
+        case SYS_CLOSE:
+            return (unsigned int)fs_fd_close((int)arg0);
+        case SYS_READ:
+            return (unsigned int)fs_fd_read((int)arg0, (char*)arg1, (int)arg2);
+        case SYS_WRITE:
+            return (unsigned int)fs_fd_write((int)arg0, (const char*)arg1, (int)arg2);
         default:
             return 0xFFFFFFFFu;
     }
@@ -41,11 +41,19 @@ unsigned int syscall_invoke(unsigned int number) {
 }
 
 unsigned int syscall_invoke1(unsigned int number, unsigned int arg0) {
+    return syscall_invoke2(number, arg0, 0);
+}
+
+unsigned int syscall_invoke2(unsigned int number, unsigned int arg0, unsigned int arg1) {
+    return syscall_invoke3(number, arg0, arg1, 0);
+}
+
+unsigned int syscall_invoke3(unsigned int number, unsigned int arg0, unsigned int arg1, unsigned int arg2) {
     unsigned int ret;
     asm volatile(
         "int $0x80"
         : "=a"(ret)
-        : "a"(number), "b"(arg0)
+        : "a"(number), "b"(arg0), "c"(arg1), "d"(arg2)
         : "memory"
     );
     return ret;

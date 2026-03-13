@@ -88,10 +88,14 @@ isr_syscall_handler:
     pusha
     mov eax, [esp + 28]
     mov ebx, [esp + 16]
+    mov ecx, [esp + 24]
+    mov edx, [esp + 20]
+    push edx
+    push ecx
     push ebx
     push eax
     call syscall_dispatch
-    add esp, 8
+    add esp, 16
     mov [esp + 28], eax
     popa
     iretd

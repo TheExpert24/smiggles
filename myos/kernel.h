@@ -221,9 +221,23 @@ extern void irq12_mouse_handler();
 extern void isr_syscall_handler();
 
 // Syscalls
-unsigned int syscall_dispatch(unsigned int number, unsigned int arg0);
+unsigned int syscall_dispatch(unsigned int number, unsigned int arg0, unsigned int arg1, unsigned int arg2);
 unsigned int syscall_invoke(unsigned int number);
 unsigned int syscall_invoke1(unsigned int number, unsigned int arg0);
+unsigned int syscall_invoke2(unsigned int number, unsigned int arg0, unsigned int arg1);
+unsigned int syscall_invoke3(unsigned int number, unsigned int arg0, unsigned int arg1, unsigned int arg2);
+
+#define SYS_YIELD      0u
+#define SYS_GET_TICKS  1u
+#define SYS_GET_PID    2u
+#define SYS_WAIT_TICKS 3u
+#define SYS_SPAWN_DEMO 4u
+#define SYS_KILL_PID   5u
+#define SYS_GET_CPL    6u
+#define SYS_OPEN       7u
+#define SYS_CLOSE      8u
+#define SYS_READ       9u
+#define SYS_WRITE      10u
 
 // Filesystem
 void init_filesystem(void);
@@ -233,6 +247,19 @@ int fs_rm(const char* path, int recursive);
 int resolve_path(const char* path);
 void get_full_path(int node_idx, char* path, int max_len);
 int parse_path(const char* path, char components[32][MAX_NAME_LENGTH], int* comp_count);
+
+#define FS_O_READ   0x01
+#define FS_O_WRITE  0x02
+#define FS_O_CREATE 0x04
+#define FS_O_TRUNC  0x08
+#define FS_O_APPEND 0x10
+
+void fs_fd_init(void);
+int fs_fd_open(const char* path, int flags);
+int fs_fd_close(int fd);
+int fs_fd_read(int fd, char* buffer, int count);
+int fs_fd_write(int fd, const char* buffer, int count);
+void fs_fd_close_for_pid(int pid);
 
 // Persistent storage
 void fs_save(void);

@@ -10,6 +10,7 @@ static void process_demo_entry(void);
 
 static void process_release_resources(PCB* proc) {
     if (!proc) return;
+    fs_fd_close_for_pid(proc->pid);
     if (proc->stack_base) {
         free_page((void*)proc->stack_base);
         proc->stack_base = 0;

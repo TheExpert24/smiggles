@@ -787,6 +787,69 @@ static void handle_syscalltest_command(char* video, int* cursor) {
     print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
 }
 
+static void handle_fdtest_command(const char* arg, char* video, int* cursor) {
+    char path[MAX_PATH_LENGTH];
+    int path_len = 0;
+
+    while (arg[path_len] == ' ') path_len++;
+    if (arg[path_len] == 0) {
+        print_string("Usage: fdtest <path>", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    int src = path_len;
+    int dst = 0;
+    while (arg[src] && dst < MAX_PATH_LENGTH - 1) {
+        path[dst++] = arg[src++];
+    }
+    while (dst > 0 && path[dst - 1] == ' ') dst--;
+    path[dst] = 0;
+
+    if (path[0] == 0) {
+        print_string("Usage: fdtest <path>", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    const char* payload = "fdtest: syscall write/read OK";
+    int payload_len = str_len(payload);
+    char readback[64];
+    for (int i = 0; i < (int)sizeof(readback); i++) readback[i] = 0;
+
+    int fdw = (int)syscall_invoke2(SYS_OPEN, (unsigned int)path, (unsigned int)(FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC));
+    if (fdw < 0) {
+        print_string("fdtest: open(write) failed", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    int wrote = (int)syscall_invoke3(SYS_WRITE, (unsigned int)fdw, (unsigned int)payload, (unsigned int)payload_len);
+    syscall_invoke1(SYS_CLOSE, (unsigned int)fdw);
+    if (wrote != payload_len) {
+        print_string("fdtest: write failed", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    int fdr = (int)syscall_invoke2(SYS_OPEN, (unsigned int)path, (unsigned int)FS_O_READ);
+    if (fdr < 0) {
+        print_string("fdtest: open(read) failed", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    int readn = (int)syscall_invoke3(SYS_READ, (unsigned int)fdr, (unsigned int)readback, (unsigned int)(sizeof(readback) - 1));
+    syscall_invoke1(SYS_CLOSE, (unsigned int)fdr);
+    if (readn < 0) {
+        print_string("fdtest: read failed", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    readback[readn] = 0;
+    if (mini_strcmp(readback, payload) != 0) {
+        print_string("fdtest: content mismatch", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    print_string("fdtest: PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+}
+
 static void handle_halt_command(char* video, int* cursor) {
     handle_clear_command(video, cursor);
     print_string("Shutting down...", 15, video, cursor, COLOR_LIGHT_RED);
@@ -1452,6 +1515,7 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
             "neofetch - system info\n"
             "basic - BASIC interpreter\n"
             "exec <file.bas> - run BASIC file\n"
+            "fdtest <file> - fd syscall open/write/read test\n"
             "panic - show kernel panic screen\n"
             "halt - shutdown\n"
             "reboot - restart\n",
@@ -1520,6 +1584,10 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
         handle_kill_command(cmd + 5, video, cursor);
     } else if (cmd[0] == 'w' && cmd[1] == 'a' && cmd[2] == 'i' && cmd[3] == 't' && cmd[4] == ' ') {
         handle_wait_command(cmd + 5, video, cursor);
+    } else if (mini_strcmp(cmd, "fdtest") == 0) {
+        handle_fdtest_command("", video, cursor);
+    } else if (cmd[0] == 'f' && cmd[1] == 'd' && cmd[2] == 't' && cmd[3] == 'e' && cmd[4] == 's' && cmd[5] == 't' && cmd[6] == ' ') {
+        handle_fdtest_command(cmd + 7, video, cursor);
     } else if (mini_strcmp(cmd, "syscalltest") == 0) {
         handle_syscalltest_command(video, cursor);
     } else if (mini_strcmp(cmd, "halt") == 0) {
@@ -1557,7 +1625,7 @@ void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* v
     const char* commands[] = {
         "ls", "cd", "pwd", "cat", "mkdir", "rmdir", "rm", "touch", "cp", "mv",
         "echo", "edit", "tree", "grep", "clear", "cls", "help", "time", "ping", "exec",
-        "about", "ver", "panic", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "filesize", "neofetch", "basic", "syscalltest", "spawn", "ps", "kill", "wait"
+        "about", "ver", "panic", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "filesize", "neofetch", "basic", "syscalltest", "fdtest", "spawn", "ps", "kill", "wait"
     };
     int cmd_count = (int)(sizeof(commands) / sizeof(commands[0]));
     
