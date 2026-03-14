@@ -46,6 +46,8 @@ static void handle_filesize_command(const char* filename, char* video, int* curs
 // --- Global Variables ---
 char history[10][64];
 int history_count = 0;
+static int udpecho_fd = -1;
+static uint16_t udpecho_port = 0;
 
 // --- User Authentication ---
 void handle_login_command(char* video, int* cursor) {
@@ -627,6 +629,45 @@ static int parse_ipv4_text(const char* s, uint8_t out_ip[4]) {
 
     if (!seen_digit || part != 3) return 0;
     out_ip[3] = (uint8_t)value;
+    return 1;
+}
+
+static int udpecho_step_once(char* video, int* cursor) {
+    uint8_t src_ip[4];
+    uint16_t src_port = 0;
+    uint8_t payload[513];
+    int payload_len = 0;
+    int r;
+
+    if (udpecho_fd < 0) return -1;
+
+    r = sock_recvfrom(udpecho_fd, src_ip, &src_port, payload, 512, &payload_len);
+    if (r <= 0) return r;
+
+    if (payload_len < 0) payload_len = 0;
+    if (payload_len > 512) payload_len = 512;
+
+    if (sock_sendto(udpecho_fd, src_ip, src_port, payload, payload_len) <= 0) {
+        print_string("UDPECHO: reply send failed", -1, video, cursor, COLOR_LIGHT_RED);
+        return -2;
+    }
+
+    {
+        char line[96];
+        char value[24];
+        line[0] = 0;
+        str_concat(line, "UDPECHO: echoed ");
+        int_to_str(payload_len, value); str_concat(line, value);
+        str_concat(line, " bytes to ");
+        int_to_str(src_ip[0], value); str_concat(line, value); str_concat(line, ".");
+        int_to_str(src_ip[1], value); str_concat(line, value); str_concat(line, ".");
+        int_to_str(src_ip[2], value); str_concat(line, value); str_concat(line, ".");
+        int_to_str(src_ip[3], value); str_concat(line, value);
+        str_concat(line, ":");
+        int_to_str((int)src_port, value); str_concat(line, value);
+        print_string(line, -1, video, cursor, COLOR_LIGHT_GREEN);
+    }
+
     return 1;
 }
 
@@ -2034,6 +2075,34 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
         }
     } else if (mini_strcmp(cmd, "net") == 0) {
         print_string("NET usage: net poll", -1, video, cursor, COLOR_YELLOW);
+    } else if (cmd[0] == 'n' && cmd[1] == 'e' && cmd[2] == 't' && cmd[3] == ' ' && cmd[4] == 'p' && cmd[5] == 'u' && cmd[6] == 'm' && cmd[7] == 'p' && cmd[8] == ' ') {
+        int count = 0;
+        int processed = 0;
+        int no_data = 0;
+        int errors = 0;
+        char line[96];
+        char value[24];
+
+        if (!parse_nonneg_int(cmd + 9, &count) || count <= 0) {
+            print_string("Usage: net pump <count>", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+
+        for (int i = 0; i < count; i++) {
+            int r = net_poll_once();
+            if (r == 1) processed++;
+            else if (r == 0) no_data++;
+            else if (r < 0) errors++;
+        }
+
+        line[0] = 0;
+        str_concat(line, "NET pump: processed=");
+        int_to_str(processed, value); str_concat(line, value);
+        str_concat(line, " no-data=");
+        int_to_str(no_data, value); str_concat(line, value);
+        str_concat(line, " err=");
+        int_to_str(errors, value); str_concat(line, value);
+        print_string(line, -1, video, cursor, COLOR_LIGHT_CYAN);
     } else if (mini_strcmp(cmd, "tcp poll") == 0) {
         int r = tcp_poll_once();
         if (r == 0) {
@@ -2311,6 +2380,96 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
         }
     } else if (mini_strcmp(cmd, "sock") == 0) {
         print_string("SOCK usage: sock open udp|bind|send|recv|close|list", -1, video, cursor, COLOR_YELLOW);
+    } else if (cmd[0] == 'u' && cmd[1] == 'd' && cmd[2] == 'p' && cmd[3] == 'e' && cmd[4] == 'c' && cmd[5] == 'h' && cmd[6] == 'o' && cmd[7] == ' ' && cmd[8] == 's' && cmd[9] == 't' && cmd[10] == 'a' && cmd[11] == 'r' && cmd[12] == 't' && cmd[13] == ' ') {
+        int port = 0;
+        char line[64];
+        char value[24];
+        int fd;
+
+        if (!parse_nonneg_int(cmd + 14, &port) || port < 1 || port > 65535) {
+            print_string("Usage: udpecho start <port>", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+
+        if (udpecho_fd >= 0) {
+            sock_close(udpecho_fd);
+            udpecho_fd = -1;
+            udpecho_port = 0;
+        }
+
+        fd = sock_open_udp();
+        if (fd < 0 || sock_bind(fd, (uint16_t)port) <= 0) {
+            if (fd >= 0) sock_close(fd);
+            print_string("UDPECHO: start failed", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+
+        udpecho_fd = fd;
+        udpecho_port = (uint16_t)port;
+
+        line[0] = 0;
+        str_concat(line, "UDPECHO: started on port ");
+        int_to_str(port, value); str_concat(line, value);
+        print_string(line, -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else if (mini_strcmp(cmd, "udpecho step") == 0) {
+        int r = udpecho_step_once(video, cursor);
+        if (r == -1) {
+            print_string("UDPECHO: not running", -1, video, cursor, COLOR_YELLOW);
+        } else if (r == 0) {
+            print_string("UDPECHO: no data", -1, video, cursor, COLOR_YELLOW);
+        } else if (r < 0) {
+            print_string("UDPECHO: step failed", -1, video, cursor, COLOR_LIGHT_RED);
+        }
+    } else if (cmd[0] == 'u' && cmd[1] == 'd' && cmd[2] == 'p' && cmd[3] == 'e' && cmd[4] == 'c' && cmd[5] == 'h' && cmd[6] == 'o' && cmd[7] == ' ' && cmd[8] == 'r' && cmd[9] == 'u' && cmd[10] == 'n' && cmd[11] == ' ') {
+        int count = 0;
+        int echoed = 0;
+        char line[64];
+        char value[24];
+
+        if (!parse_nonneg_int(cmd + 12, &count) || count <= 0) {
+            print_string("Usage: udpecho run <count>", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+
+        if (udpecho_fd < 0) {
+            print_string("UDPECHO: not running", -1, video, cursor, COLOR_YELLOW);
+            return;
+        }
+
+        for (int i = 0; i < count; i++) {
+            int r = udpecho_step_once(video, cursor);
+            if (r > 0) echoed++;
+        }
+
+        line[0] = 0;
+        str_concat(line, "UDPECHO: echoed ");
+        int_to_str(echoed, value); str_concat(line, value);
+        str_concat(line, " packets");
+        print_string(line, -1, video, cursor, COLOR_LIGHT_CYAN);
+    } else if (mini_strcmp(cmd, "udpecho stop") == 0) {
+        if (udpecho_fd >= 0) {
+            sock_close(udpecho_fd);
+            udpecho_fd = -1;
+            udpecho_port = 0;
+            print_string("UDPECHO: stopped", -1, video, cursor, COLOR_YELLOW);
+        } else {
+            print_string("UDPECHO: not running", -1, video, cursor, COLOR_YELLOW);
+        }
+    } else if (mini_strcmp(cmd, "udpecho status") == 0) {
+        char line[64];
+        char value[24];
+        if (udpecho_fd < 0) {
+            print_string("UDPECHO: OFF", -1, video, cursor, COLOR_YELLOW);
+        } else {
+            line[0] = 0;
+            str_concat(line, "UDPECHO: ON fd=");
+            int_to_str(udpecho_fd, value); str_concat(line, value);
+            str_concat(line, " port=");
+            int_to_str((int)udpecho_port, value); str_concat(line, value);
+            print_string(line, -1, video, cursor, COLOR_LIGHT_GREEN);
+        }
+    } else if (mini_strcmp(cmd, "udpecho") == 0) {
+        print_string("UDPECHO usage: udpecho start|step|run|stop|status", -1, video, cursor, COLOR_YELLOW);
     } else if (mini_strcmp(cmd, "about") == 0) {
         handle_command(cmd, video, cursor, "about", "Smiggles OS is a lightweight operating system designed by Jules Miller and Vajra Vanukuri.", COLOR_LIGHT_GRAY);
     } else if (mini_strcmp(cmd, "help") == 0) {
@@ -2356,6 +2515,7 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
             "udp stats - show UDP counters\n"
             "udp listen <port>|off|show - filter rx by dst port\n"
             "net poll - unified poll (ARP/ICMP/UDP/TCP)\n"
+            "net pump <count> - poll network stack repeatedly\n"
             "tcp poll - unified poll and process one TCP packet\n"
             "tcp listen <port>|off|show - TCP handshake listener\n"
             "tcp stats - show TCP handshake counters\n"
@@ -2366,6 +2526,11 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
             "sock recv <fd> - receive UDP via bound socket\n"
             "sock close <fd> - close socket\n"
             "sock list - list open sockets\n"
+            "udpecho start <port> - start UDP echo demo app\n"
+            "udpecho step - process one packet for UDP echo\n"
+            "udpecho run <count> - process multiple echo steps\n"
+            "udpecho stop - stop UDP echo demo\n"
+            "udpecho status - show UDP echo state\n"
             "basic - BASIC interpreter\n"
             "exec <file.bas> - run BASIC file\n"
             "fdtest <file> - fd syscall open/write/read test\n"
@@ -2478,7 +2643,7 @@ void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* v
     const char* commands[] = {
         "ls", "cd", "pwd", "cat", "mkdir", "rmdir", "rm", "touch", "cp", "mv",
         "echo", "edit", "tree", "grep", "clear", "cls", "help", "time", "ping", "exec",
-        "udp", "tcp", "net", "sock", "about", "ver", "panic", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "filesize", "neofetch", "basic", "syscalltest", "fdtest", "spawn", "ps", "kill", "wait"
+        "udp", "tcp", "net", "sock", "udpecho", "about", "ver", "panic", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "filesize", "neofetch", "basic", "syscalltest", "fdtest", "spawn", "ps", "kill", "wait"
     };
     int cmd_count = (int)(sizeof(commands) / sizeof(commands[0]));
     
