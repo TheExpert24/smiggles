@@ -95,6 +95,11 @@ int icmp_poll_once(void) {
     int rx_result = rtl8139_poll_receive(frame, sizeof(frame), &length);
 
     if (rx_result <= 0) return rx_result;
+    return icmp_process_frame(frame, length);
+}
+
+int icmp_process_frame(const uint8_t* frame, int length) {
+    if (!frame || length <= 0) return -10;
 
     icmp_stats.frames_polled++;
 
@@ -102,7 +107,7 @@ int icmp_poll_once(void) {
     if (frame[12] != ETH_TYPE_IPV4_HI || frame[13] != ETH_TYPE_IPV4_LO) return 2;
 
     {
-        uint8_t* ip = frame + 14;
+        const uint8_t* ip = frame + 14;
         uint8_t version = (uint8_t)(ip[0] >> 4);
         uint8_t ihl_words = (uint8_t)(ip[0] & 0x0F);
         int ip_hlen = (int)ihl_words * 4;
@@ -121,7 +126,7 @@ int icmp_poll_once(void) {
         if (ip[9] != IP_PROTOCOL_ICMP) return 3;
 
         {
-            uint8_t* icmp = ip + ip_hlen;
+            const uint8_t* icmp = ip + ip_hlen;
             int icmp_len = total_len - ip_hlen;
             uint8_t local_ip[4];
 

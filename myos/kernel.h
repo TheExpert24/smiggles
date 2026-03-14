@@ -237,6 +237,40 @@ typedef struct {
     uint32_t parse_errors;
 } ICMPStats;
 
+typedef struct {
+    uint32_t frames_polled;
+    uint32_t udp_seen;
+    uint32_t non_udp_ipv4;
+    uint32_t parse_errors;
+    uint32_t sent_packets;
+    uint32_t recv_queued;
+    uint32_t recv_dropped;
+    uint8_t last_src_ip[4];
+    uint8_t last_dst_ip[4];
+    uint16_t last_src_port;
+    uint16_t last_dst_port;
+    uint16_t last_payload_length;
+} UDPStats;
+
+typedef struct {
+    uint32_t frames_polled;
+    uint32_t tcp_seen;
+    uint32_t parse_errors;
+    uint32_t syn_received;
+    uint32_t synack_sent;
+    uint32_t established;
+    uint32_t ack_sent;
+    uint32_t rst_seen;
+} TCPStats;
+
+typedef struct {
+    uint8_t src_ip[4];
+    uint8_t dst_ip[4];
+    uint16_t src_port;
+    uint16_t dst_port;
+    uint8_t state;
+} TCPConnInfo;
+
 // --- Function Declarations ---
 
 // Memory management
@@ -390,6 +424,7 @@ int arp_set_local_ip(const uint8_t ip[4]);
 int arp_get_local_ip(uint8_t ip_out[4]);
 int arp_send_request(const uint8_t target_ip[4]);
 int arp_poll_once(void);
+int arp_process_frame(const uint8_t* frame, int length);
 int arp_get_cache_count(void);
 int arp_get_cache_entry(int index, uint8_t ip_out[4], uint8_t mac_out[6]);
 int arp_lookup_mac(const uint8_t ip[4], uint8_t mac_out[6]);
@@ -401,7 +436,49 @@ int ipv4_get_stats(IPv4Stats* out_stats);
 // ICMP
 int icmp_send_echo_request(const uint8_t target_ip[4], uint16_t identifier, uint16_t sequence);
 int icmp_poll_once(void);
+int icmp_process_frame(const uint8_t* frame, int length);
 int icmp_get_stats(ICMPStats* out_stats);
+
+// UDP
+int udp_send_datagram(const uint8_t target_ip[4], uint16_t src_port, uint16_t dst_port, const uint8_t* payload, int payload_len);
+int udp_poll_once(void);
+int udp_process_frame(const uint8_t* frame, int length);
+int udp_recv_next(uint8_t src_ip_out[4], uint16_t* src_port_out, uint16_t* dst_port_out, uint8_t* payload_out, int max_payload, int* out_payload_len);
+int udp_recv_next_for_port(uint16_t dst_port_filter, uint8_t src_ip_out[4], uint16_t* src_port_out, uint16_t* dst_port_out, uint8_t* payload_out, int max_payload, int* out_payload_len);
+int udp_get_stats(UDPStats* out_stats);
+int udp_set_listen_port(uint16_t port);
+int udp_clear_listen_port(void);
+int udp_get_listen_port(uint16_t* out_port);
+
+typedef struct {
+    int in_use;
+    int type;
+    uint16_t local_port;
+} SocketInfo;
+
+#define SOCK_TYPE_UDP 1
+
+// Minimal sockets API (UDP milestone)
+int sock_open_udp(void);
+int sock_bind(int fd, uint16_t local_port);
+int sock_sendto(int fd, const uint8_t target_ip[4], uint16_t target_port, const uint8_t* payload, int payload_len);
+int sock_recvfrom(int fd, uint8_t src_ip_out[4], uint16_t* src_port_out, uint8_t* payload_out, int max_payload, int* out_payload_len);
+int sock_close(int fd);
+int sock_get_count(void);
+int sock_get_info(int index, SocketInfo* out_info);
+
+// TCP (handshake milestone)
+int tcp_poll_once(void);
+int tcp_process_frame(const uint8_t* frame, int length);
+int tcp_set_listen_port(uint16_t port);
+int tcp_clear_listen_port(void);
+int tcp_get_listen_port(uint16_t* out_port);
+int tcp_get_stats(TCPStats* out_stats);
+int tcp_get_conn_count(void);
+int tcp_get_conn_info(int index, TCPConnInfo* out_info);
+
+// Unified network dispatcher
+int net_poll_once(void);
 
 #endif // KERNEL_H
 

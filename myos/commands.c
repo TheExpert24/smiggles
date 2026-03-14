@@ -1845,6 +1845,472 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
         }
     } else if (mini_strcmp(cmd, "ping") == 0) {
         print_string("Usage: ping <a.b.c.d>", -1, video, cursor, COLOR_YELLOW);
+    } else if (cmd[0] == 'u' && cmd[1] == 'd' && cmd[2] == 'p' && cmd[3] == ' ' && cmd[4] == 's' && cmd[5] == 'e' && cmd[6] == 'n' && cmd[7] == 'd' && cmd[8] == ' ') {
+        uint8_t target_ip[4];
+        char ip_buf[20];
+        char port_buf[12];
+        const char* p = cmd + 9;
+        int i = 0;
+        int j = 0;
+        int dst_port = 0;
+        int sent;
+
+        while (*p == ' ') p++;
+        while (*p && *p != ' ' && i < (int)sizeof(ip_buf) - 1) ip_buf[i++] = *p++;
+        ip_buf[i] = 0;
+        while (*p == ' ') p++;
+        while (*p && *p != ' ' && j < (int)sizeof(port_buf) - 1) port_buf[j++] = *p++;
+        port_buf[j] = 0;
+        while (*p == ' ') p++;
+
+        if (!parse_ipv4_text(ip_buf, target_ip) || !parse_nonneg_int(port_buf, &dst_port) || dst_port < 1 || dst_port > 65535 || *p == 0) {
+            print_string("Usage: udp send <a.b.c.d> <port> <text>", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+
+        {
+            int payload_len = str_len(p);
+            if (payload_len > 512) payload_len = 512;
+            sent = udp_send_datagram(target_ip, 40000, (uint16_t)dst_port, (const uint8_t*)p, payload_len);
+        }
+
+        if (sent > 0) {
+            print_string("UDP: datagram sent", -1, video, cursor, COLOR_LIGHT_GREEN);
+        } else if (sent == -4) {
+            print_string("UDP: target MAC unknown (run arp whohas first)", -1, video, cursor, COLOR_YELLOW);
+        } else {
+            print_string("UDP: send failed", -1, video, cursor, COLOR_LIGHT_RED);
+        }
+    } else if (mini_strcmp(cmd, "udp poll") == 0) {
+        int r = udp_poll_once();
+        if (r == 0) {
+            print_string("UDP: no packet available", -1, video, cursor, COLOR_YELLOW);
+        } else if (r == 1) {
+            print_string("UDP: packet processed", -1, video, cursor, COLOR_LIGHT_GREEN);
+        } else if (r == 2 || r == 3) {
+            print_string("UDP: no supported protocol in frame", -1, video, cursor, COLOR_YELLOW);
+        } else {
+            char line[64];
+            char value[24];
+            line[0] = 0;
+            str_concat(line, "UDP: parse failed code=");
+            int_to_str(r, value);
+            str_concat(line, value);
+            print_string(line, -1, video, cursor, COLOR_LIGHT_RED);
+        }
+    } else if (mini_strcmp(cmd, "udp listen") == 0 || mini_strcmp(cmd, "udp listen show") == 0) {
+        uint16_t port = 0;
+        if (udp_get_listen_port(&port)) {
+            char line[64];
+            char value[24];
+            line[0] = 0;
+            str_concat(line, "UDP listen: ON port=");
+            int_to_str((int)port, value);
+            str_concat(line, value);
+            print_string(line, -1, video, cursor, COLOR_LIGHT_GREEN);
+        } else {
+            print_string("UDP listen: OFF", -1, video, cursor, COLOR_YELLOW);
+        }
+    } else if (mini_strcmp(cmd, "udp listen off") == 0) {
+        udp_clear_listen_port();
+        print_string("UDP listen: OFF", -1, video, cursor, COLOR_YELLOW);
+    } else if (cmd[0] == 'u' && cmd[1] == 'd' && cmd[2] == 'p' && cmd[3] == ' ' && cmd[4] == 'l' && cmd[5] == 'i' && cmd[6] == 's' && cmd[7] == 't' && cmd[8] == 'e' && cmd[9] == 'n' && cmd[10] == ' ') {
+        int port = 0;
+        if (!parse_nonneg_int(cmd + 11, &port) || port < 1 || port > 65535) {
+            print_string("Usage: udp listen <port>|off|show", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+        if (udp_set_listen_port((uint16_t)port)) {
+            char line[64];
+            char value[24];
+            line[0] = 0;
+            str_concat(line, "UDP listen: ON port=");
+            int_to_str(port, value);
+            str_concat(line, value);
+            print_string(line, -1, video, cursor, COLOR_LIGHT_GREEN);
+        } else {
+            print_string("UDP listen: failed", -1, video, cursor, COLOR_LIGHT_RED);
+        }
+    } else if (mini_strcmp(cmd, "udp recv") == 0) {
+        uint8_t src_ip[4];
+        uint16_t src_port;
+        uint16_t dst_port;
+        uint8_t payload[513];
+        int payload_len = 0;
+        int r = udp_recv_next(src_ip, &src_port, &dst_port, payload, 512, &payload_len);
+        char line[128];
+        char value[24];
+
+        if (r == 0) {
+            print_string("UDP: receive queue empty", -1, video, cursor, COLOR_YELLOW);
+            return;
+        }
+
+        if (r < 0) {
+            print_string("UDP: receive failed", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+
+        if (payload_len < 0) payload_len = 0;
+        if (payload_len > 512) payload_len = 512;
+        payload[payload_len] = 0;
+
+        line[0] = 0;
+        str_concat(line, "UDP: ");
+        int_to_str(src_ip[0], value); str_concat(line, value); str_concat(line, ".");
+        int_to_str(src_ip[1], value); str_concat(line, value); str_concat(line, ".");
+        int_to_str(src_ip[2], value); str_concat(line, value); str_concat(line, ".");
+        int_to_str(src_ip[3], value); str_concat(line, value);
+        str_concat(line, ":");
+        int_to_str((int)src_port, value); str_concat(line, value);
+        str_concat(line, " -> :");
+        int_to_str((int)dst_port, value); str_concat(line, value);
+        str_concat(line, " len=");
+        int_to_str(payload_len, value); str_concat(line, value);
+        print_string(line, -1, video, cursor, COLOR_LIGHT_CYAN);
+
+        for (int k = 0; k < payload_len; k++) {
+            if (payload[k] < 32 || payload[k] > 126) payload[k] = '.';
+        }
+        print_string((const char*)payload, payload_len, video, cursor, COLOR_LIGHT_GRAY);
+    } else if (mini_strcmp(cmd, "udp stats") == 0) {
+        UDPStats stats;
+        char line[96];
+        char value[24];
+        uint16_t listen_port = 0;
+
+        if (!udp_get_stats(&stats)) {
+            print_string("UDP: stats unavailable", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+
+        line[0] = 0;
+        str_concat(line, "UDP frames=");
+        int_to_str((int)stats.frames_polled, value); str_concat(line, value);
+        str_concat(line, " seen=");
+        int_to_str((int)stats.udp_seen, value); str_concat(line, value);
+        str_concat(line, " non-udp=");
+        int_to_str((int)stats.non_udp_ipv4, value); str_concat(line, value);
+        print_string(line, -1, video, cursor, COLOR_LIGHT_GRAY);
+
+        line[0] = 0;
+        str_concat(line, "UDP sent=");
+        int_to_str((int)stats.sent_packets, value); str_concat(line, value);
+        str_concat(line, " queued=");
+        int_to_str((int)stats.recv_queued, value); str_concat(line, value);
+        str_concat(line, " drop=");
+        int_to_str((int)stats.recv_dropped, value); str_concat(line, value);
+        str_concat(line, " err=");
+        int_to_str((int)stats.parse_errors, value); str_concat(line, value);
+        print_string(line, -1, video, cursor, COLOR_LIGHT_GRAY);
+
+        line[0] = 0;
+        str_concat(line, "UDP listen=");
+        if (udp_get_listen_port(&listen_port)) {
+            str_concat(line, "on:");
+            int_to_str((int)listen_port, value); str_concat(line, value);
+        } else {
+            str_concat(line, "off");
+        }
+        print_string(line, -1, video, cursor, COLOR_LIGHT_GRAY);
+    } else if (mini_strcmp(cmd, "udp") == 0) {
+        print_string("UDP usage: udp send|poll|recv|stats|listen", -1, video, cursor, COLOR_YELLOW);
+    } else if (mini_strcmp(cmd, "net poll") == 0) {
+        int r = net_poll_once();
+        if (r == 0) {
+            print_string("NET: no packet available", -1, video, cursor, COLOR_YELLOW);
+        } else if (r == 1) {
+            print_string("NET: packet processed", -1, video, cursor, COLOR_LIGHT_GREEN);
+        } else if (r == 2 || r == 3) {
+            print_string("NET: no supported protocol in frame", -1, video, cursor, COLOR_YELLOW);
+        } else {
+            char line[64];
+            char value[24];
+            line[0] = 0;
+            str_concat(line, "NET: parse failed code=");
+            int_to_str(r, value);
+            str_concat(line, value);
+            print_string(line, -1, video, cursor, COLOR_LIGHT_RED);
+        }
+    } else if (mini_strcmp(cmd, "net") == 0) {
+        print_string("NET usage: net poll", -1, video, cursor, COLOR_YELLOW);
+    } else if (mini_strcmp(cmd, "tcp poll") == 0) {
+        int r = tcp_poll_once();
+        if (r == 0) {
+            print_string("TCP: no packet available", -1, video, cursor, COLOR_YELLOW);
+        } else if (r == 1) {
+            print_string("TCP: packet processed", -1, video, cursor, COLOR_LIGHT_GREEN);
+        } else if (r == 2 || r == 3) {
+            print_string("TCP: no TCP packet in frame", -1, video, cursor, COLOR_YELLOW);
+        } else {
+            char line[64];
+            char value[24];
+            line[0] = 0;
+            str_concat(line, "TCP: parse failed code=");
+            int_to_str(r, value);
+            str_concat(line, value);
+            print_string(line, -1, video, cursor, COLOR_LIGHT_RED);
+        }
+    } else if (mini_strcmp(cmd, "tcp listen") == 0 || mini_strcmp(cmd, "tcp listen show") == 0) {
+        uint16_t port = 0;
+        if (tcp_get_listen_port(&port)) {
+            char line[64];
+            char value[24];
+            line[0] = 0;
+            str_concat(line, "TCP listen: ON port=");
+            int_to_str((int)port, value);
+            str_concat(line, value);
+            print_string(line, -1, video, cursor, COLOR_LIGHT_GREEN);
+        } else {
+            print_string("TCP listen: OFF", -1, video, cursor, COLOR_YELLOW);
+        }
+    } else if (mini_strcmp(cmd, "tcp listen off") == 0) {
+        tcp_clear_listen_port();
+        print_string("TCP listen: OFF", -1, video, cursor, COLOR_YELLOW);
+    } else if (cmd[0] == 't' && cmd[1] == 'c' && cmd[2] == 'p' && cmd[3] == ' ' && cmd[4] == 'l' && cmd[5] == 'i' && cmd[6] == 's' && cmd[7] == 't' && cmd[8] == 'e' && cmd[9] == 'n' && cmd[10] == ' ') {
+        int port = 0;
+        if (!parse_nonneg_int(cmd + 11, &port) || port < 1 || port > 65535) {
+            print_string("Usage: tcp listen <port>|off|show", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+        if (tcp_set_listen_port((uint16_t)port)) {
+            char line[64];
+            char value[24];
+            line[0] = 0;
+            str_concat(line, "TCP listen: ON port=");
+            int_to_str(port, value);
+            str_concat(line, value);
+            print_string(line, -1, video, cursor, COLOR_LIGHT_GREEN);
+        } else {
+            print_string("TCP listen: failed", -1, video, cursor, COLOR_LIGHT_RED);
+        }
+    } else if (mini_strcmp(cmd, "tcp stats") == 0) {
+        TCPStats stats;
+        char line[96];
+        char value[24];
+        uint16_t listen_port = 0;
+
+        if (!tcp_get_stats(&stats)) {
+            print_string("TCP: stats unavailable", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+
+        line[0] = 0;
+        str_concat(line, "TCP frames=");
+        int_to_str((int)stats.frames_polled, value); str_concat(line, value);
+        str_concat(line, " seen=");
+        int_to_str((int)stats.tcp_seen, value); str_concat(line, value);
+        str_concat(line, " err=");
+        int_to_str((int)stats.parse_errors, value); str_concat(line, value);
+        print_string(line, -1, video, cursor, COLOR_LIGHT_GRAY);
+
+        line[0] = 0;
+        str_concat(line, "TCP syn=");
+        int_to_str((int)stats.syn_received, value); str_concat(line, value);
+        str_concat(line, " synack=");
+        int_to_str((int)stats.synack_sent, value); str_concat(line, value);
+        str_concat(line, " est=");
+        int_to_str((int)stats.established, value); str_concat(line, value);
+        str_concat(line, " ack=");
+        int_to_str((int)stats.ack_sent, value); str_concat(line, value);
+        print_string(line, -1, video, cursor, COLOR_LIGHT_GRAY);
+
+        line[0] = 0;
+        str_concat(line, "TCP listen=");
+        if (tcp_get_listen_port(&listen_port)) {
+            str_concat(line, "on:");
+            int_to_str((int)listen_port, value); str_concat(line, value);
+        } else {
+            str_concat(line, "off");
+        }
+        print_string(line, -1, video, cursor, COLOR_LIGHT_GRAY);
+    } else if (mini_strcmp(cmd, "tcp conns") == 0) {
+        int count = tcp_get_conn_count();
+        char line[128];
+        char value[24];
+
+        if (count <= 0) {
+            print_string("TCP: no active connections", -1, video, cursor, COLOR_YELLOW);
+            return;
+        }
+
+        for (int i = 0; i < count; i++) {
+            TCPConnInfo info;
+            const char* state = "UNK";
+            if (!tcp_get_conn_info(i, &info)) continue;
+            if (info.state == 1) state = "SYN_RCVD";
+            else if (info.state == 2) state = "ESTABLISHED";
+
+            line[0] = 0;
+            int_to_str(info.src_ip[0], value); str_concat(line, value); str_concat(line, ".");
+            int_to_str(info.src_ip[1], value); str_concat(line, value); str_concat(line, ".");
+            int_to_str(info.src_ip[2], value); str_concat(line, value); str_concat(line, ".");
+            int_to_str(info.src_ip[3], value); str_concat(line, value);
+            str_concat(line, ":");
+            int_to_str((int)info.src_port, value); str_concat(line, value);
+            str_concat(line, " -> ");
+            int_to_str(info.dst_ip[0], value); str_concat(line, value); str_concat(line, ".");
+            int_to_str(info.dst_ip[1], value); str_concat(line, value); str_concat(line, ".");
+            int_to_str(info.dst_ip[2], value); str_concat(line, value); str_concat(line, ".");
+            int_to_str(info.dst_ip[3], value); str_concat(line, value);
+            str_concat(line, ":");
+            int_to_str((int)info.dst_port, value); str_concat(line, value);
+            str_concat(line, " ");
+            str_concat(line, state);
+            print_string(line, -1, video, cursor, COLOR_LIGHT_CYAN);
+        }
+    } else if (mini_strcmp(cmd, "tcp") == 0) {
+        print_string("TCP usage: tcp listen|poll|stats|conns", -1, video, cursor, COLOR_YELLOW);
+    } else if (mini_strcmp(cmd, "sock open udp") == 0) {
+        int fd = sock_open_udp();
+        char line[64];
+        char value[24];
+        if (fd < 0) {
+            print_string("SOCK: open failed", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+        line[0] = 0;
+        str_concat(line, "SOCK: opened fd=");
+        int_to_str(fd, value); str_concat(line, value);
+        print_string(line, -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else if (cmd[0] == 's' && cmd[1] == 'o' && cmd[2] == 'c' && cmd[3] == 'k' && cmd[4] == ' ' && cmd[5] == 'b' && cmd[6] == 'i' && cmd[7] == 'n' && cmd[8] == 'd' && cmd[9] == ' ') {
+        int fd = 0;
+        int port = 0;
+        char fd_buf[16];
+        char port_buf[16];
+        const char* p = cmd + 10;
+        int i = 0;
+        int j = 0;
+        int r;
+
+        while (*p == ' ') p++;
+        while (*p && *p != ' ' && i < (int)sizeof(fd_buf) - 1) fd_buf[i++] = *p++;
+        fd_buf[i] = 0;
+        while (*p == ' ') p++;
+        while (*p && *p != ' ' && j < (int)sizeof(port_buf) - 1) port_buf[j++] = *p++;
+        port_buf[j] = 0;
+
+        if (!parse_nonneg_int(fd_buf, &fd) || !parse_nonneg_int(port_buf, &port) || port < 1 || port > 65535) {
+            print_string("Usage: sock bind <fd> <port>", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+
+        r = sock_bind(fd, (uint16_t)port);
+        if (r > 0) print_string("SOCK: bind ok", -1, video, cursor, COLOR_LIGHT_GREEN);
+        else print_string("SOCK: bind failed", -1, video, cursor, COLOR_LIGHT_RED);
+    } else if (cmd[0] == 's' && cmd[1] == 'o' && cmd[2] == 'c' && cmd[3] == 'k' && cmd[4] == ' ' && cmd[5] == 's' && cmd[6] == 'e' && cmd[7] == 'n' && cmd[8] == 'd' && cmd[9] == ' ') {
+        int fd = 0;
+        int port = 0;
+        uint8_t ip[4];
+        char fd_buf[16];
+        char ip_buf[20];
+        char port_buf[16];
+        const char* p = cmd + 10;
+        int i = 0;
+        int j = 0;
+        int k = 0;
+        int r;
+
+        while (*p == ' ') p++;
+        while (*p && *p != ' ' && i < (int)sizeof(fd_buf) - 1) fd_buf[i++] = *p++;
+        fd_buf[i] = 0;
+        while (*p == ' ') p++;
+        while (*p && *p != ' ' && j < (int)sizeof(ip_buf) - 1) ip_buf[j++] = *p++;
+        ip_buf[j] = 0;
+        while (*p == ' ') p++;
+        while (*p && *p != ' ' && k < (int)sizeof(port_buf) - 1) port_buf[k++] = *p++;
+        port_buf[k] = 0;
+        while (*p == ' ') p++;
+
+        if (!parse_nonneg_int(fd_buf, &fd) || !parse_ipv4_text(ip_buf, ip) || !parse_nonneg_int(port_buf, &port) || port < 1 || port > 65535 || *p == 0) {
+            print_string("Usage: sock send <fd> <a.b.c.d> <port> <text>", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+
+        {
+            int payload_len = str_len(p);
+            if (payload_len > 512) payload_len = 512;
+            r = sock_sendto(fd, ip, (uint16_t)port, (const uint8_t*)p, payload_len);
+        }
+
+        if (r > 0) print_string("SOCK: send ok", -1, video, cursor, COLOR_LIGHT_GREEN);
+        else if (r == -4) print_string("SOCK: target MAC unknown (run arp whohas first)", -1, video, cursor, COLOR_YELLOW);
+        else print_string("SOCK: send failed", -1, video, cursor, COLOR_LIGHT_RED);
+    } else if (cmd[0] == 's' && cmd[1] == 'o' && cmd[2] == 'c' && cmd[3] == 'k' && cmd[4] == ' ' && cmd[5] == 'r' && cmd[6] == 'e' && cmd[7] == 'c' && cmd[8] == 'v' && cmd[9] == ' ') {
+        int fd = 0;
+        int r;
+        uint8_t src_ip[4];
+        uint16_t src_port = 0;
+        uint8_t payload[513];
+        int payload_len = 0;
+        char line[128];
+        char value[24];
+
+        if (!parse_nonneg_int(cmd + 10, &fd)) {
+            print_string("Usage: sock recv <fd>", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+
+        r = sock_recvfrom(fd, src_ip, &src_port, payload, 512, &payload_len);
+        if (r == 0) {
+            print_string("SOCK: no data", -1, video, cursor, COLOR_YELLOW);
+            return;
+        }
+        if (r < 0) {
+            print_string("SOCK: recv failed", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+
+        if (payload_len < 0) payload_len = 0;
+        if (payload_len > 512) payload_len = 512;
+        payload[payload_len] = 0;
+
+        line[0] = 0;
+        str_concat(line, "SOCK: from ");
+        int_to_str(src_ip[0], value); str_concat(line, value); str_concat(line, ".");
+        int_to_str(src_ip[1], value); str_concat(line, value); str_concat(line, ".");
+        int_to_str(src_ip[2], value); str_concat(line, value); str_concat(line, ".");
+        int_to_str(src_ip[3], value); str_concat(line, value);
+        str_concat(line, ":");
+        int_to_str((int)src_port, value); str_concat(line, value);
+        str_concat(line, " len=");
+        int_to_str(payload_len, value); str_concat(line, value);
+        print_string(line, -1, video, cursor, COLOR_LIGHT_CYAN);
+
+        for (int n = 0; n < payload_len; n++) {
+            if (payload[n] < 32 || payload[n] > 126) payload[n] = '.';
+        }
+        print_string((const char*)payload, payload_len, video, cursor, COLOR_LIGHT_GRAY);
+    } else if (cmd[0] == 's' && cmd[1] == 'o' && cmd[2] == 'c' && cmd[3] == 'k' && cmd[4] == ' ' && cmd[5] == 'c' && cmd[6] == 'l' && cmd[7] == 'o' && cmd[8] == 's' && cmd[9] == 'e' && cmd[10] == ' ') {
+        int fd = 0;
+        if (!parse_nonneg_int(cmd + 11, &fd)) {
+            print_string("Usage: sock close <fd>", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+        if (sock_close(fd) > 0) print_string("SOCK: closed", -1, video, cursor, COLOR_LIGHT_GREEN);
+        else print_string("SOCK: close failed", -1, video, cursor, COLOR_LIGHT_RED);
+    } else if (mini_strcmp(cmd, "sock list") == 0) {
+        int count = sock_get_count();
+        char line[96];
+        char value[24];
+
+        if (count == 0) {
+            print_string("SOCK: no open sockets", -1, video, cursor, COLOR_YELLOW);
+            return;
+        }
+
+        for (int i = 0; i < count; i++) {
+            SocketInfo info;
+            if (!sock_get_info(i, &info)) continue;
+            line[0] = 0;
+            str_concat(line, "SOCK ");
+            str_concat(line, info.type == SOCK_TYPE_UDP ? "UDP" : "?");
+            str_concat(line, " local=");
+            int_to_str((int)info.local_port, value); str_concat(line, value);
+            print_string(line, -1, video, cursor, COLOR_LIGHT_CYAN);
+        }
+    } else if (mini_strcmp(cmd, "sock") == 0) {
+        print_string("SOCK usage: sock open udp|bind|send|recv|close|list", -1, video, cursor, COLOR_YELLOW);
     } else if (mini_strcmp(cmd, "about") == 0) {
         handle_command(cmd, video, cursor, "about", "Smiggles OS is a lightweight operating system designed by Jules Miller and Vajra Vanukuri.", COLOR_LIGHT_GRAY);
     } else if (mini_strcmp(cmd, "help") == 0) {
@@ -1884,6 +2350,22 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
             "ping <a.b.c.d> - send ICMP echo request\n"
             "icmp poll - process one ICMP packet\n"
             "icmp stats - show ICMP counters\n"
+            "udp send <a.b.c.d> <port> <text> - send UDP datagram\n"
+            "udp poll - unified poll and process one packet\n"
+            "udp recv - read one queued UDP payload\n"
+            "udp stats - show UDP counters\n"
+            "udp listen <port>|off|show - filter rx by dst port\n"
+            "net poll - unified poll (ARP/ICMP/UDP/TCP)\n"
+            "tcp poll - unified poll and process one TCP packet\n"
+            "tcp listen <port>|off|show - TCP handshake listener\n"
+            "tcp stats - show TCP handshake counters\n"
+            "tcp conns - list tracked TCP handshakes\n"
+            "sock open udp - open UDP socket\n"
+            "sock bind <fd> <port> - bind UDP socket\n"
+            "sock send <fd> <ip> <port> <text> - send UDP via socket\n"
+            "sock recv <fd> - receive UDP via bound socket\n"
+            "sock close <fd> - close socket\n"
+            "sock list - list open sockets\n"
             "basic - BASIC interpreter\n"
             "exec <file.bas> - run BASIC file\n"
             "fdtest <file> - fd syscall open/write/read test\n"
@@ -1996,7 +2478,7 @@ void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* v
     const char* commands[] = {
         "ls", "cd", "pwd", "cat", "mkdir", "rmdir", "rm", "touch", "cp", "mv",
         "echo", "edit", "tree", "grep", "clear", "cls", "help", "time", "ping", "exec",
-        "about", "ver", "panic", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "filesize", "neofetch", "basic", "syscalltest", "fdtest", "spawn", "ps", "kill", "wait"
+        "udp", "tcp", "net", "sock", "about", "ver", "panic", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "filesize", "neofetch", "basic", "syscalltest", "fdtest", "spawn", "ps", "kill", "wait"
     };
     int cmd_count = (int)(sizeof(commands) / sizeof(commands[0]));
     

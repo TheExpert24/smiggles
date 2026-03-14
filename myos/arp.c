@@ -119,6 +119,11 @@ int arp_poll_once(void) {
     int rx_result = rtl8139_poll_receive(frame, sizeof(frame), &length);
 
     if (rx_result <= 0) return rx_result;
+    return arp_process_frame(frame, length);
+}
+
+int arp_process_frame(const uint8_t* frame, int length) {
+    if (!frame || length <= 0) return -11;
     if (length < 42) return 0;
 
     if (frame[12] != ETH_TYPE_ARP_HI || frame[13] != ETH_TYPE_ARP_LO) {

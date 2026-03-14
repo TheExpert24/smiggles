@@ -29,8 +29,8 @@ load_kernel:
     mov es, ax
 
     ; Load kernel sectors one-by-one so we can safely cross tracks.
-    ; Keep this comfortably above current kernel.bin size.
-    mov si, 192         ; sectors to read
+    ; Keep this above current kernel.bin growth to avoid partial loads.
+    mov si, 512         ; sectors to read
     mov ch, 0           ; cylinder
     mov dh, 0           ; head
     mov cl, 2           ; sector (starts after boot sector)
