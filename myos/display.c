@@ -65,7 +65,7 @@ static void draw_mouse_overlay(char* video) {
     mouse_saved_char = video[offset];
     mouse_saved_attr = (unsigned char)video[offset + 1];
     mouse_saved_offset = offset;
-    video[offset] = 'X';
+    video[offset] = ' '; //all we use it for is scrolling so i got rid of the X, can put it back later when we have a real GUI
     video[offset + 1] = COLOR_LIGHT_CYAN;
     mouse_visible = 1;
 }
