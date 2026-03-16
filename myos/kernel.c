@@ -374,6 +374,61 @@ static void draw_main_shell_screen(char* video, int* cursor, int* line_start_out
 
 
 
+static void shell_insert_char_at_cursor(char ch, char* cmd_buf, int* cmd_len, int* cmd_cursor, int max_len, char* video, int* cursor, int* line_start) {
+    if (ch < 32 || ch > 126) return;
+    if (*cmd_len >= (max_len - 1)) return;
+
+    if (*cmd_cursor == *cmd_len) {
+        if (*cursor >= 80 * 25) {
+            scroll_screen(video);
+            *cursor -= 80;
+            if (*line_start >= 80) *line_start -= 80;
+            else *line_start = 0;
+        }
+
+        video[*cursor * 2] = ch;
+        video[*cursor * 2 + 1] = 0x0F;
+        cmd_buf[*cmd_cursor] = ch;
+        (*cmd_len)++;
+        (*cmd_cursor)++;
+        (*cursor)++;
+
+        if (*cursor >= 80 * 25) {
+            scroll_screen(video);
+            *cursor -= 80;
+            if (*line_start >= 80) *line_start -= 80;
+            else *line_start = 0;
+        }
+
+        set_cursor_position(*cursor);
+        return;
+    }
+
+    if (*cursor >= 80 * 25) {
+        scroll_screen(video);
+        *cursor -= 80;
+        if (*line_start >= 80) *line_start -= 80;
+        else *line_start = 0;
+    }
+
+    for (int k = *cmd_len; k > *cmd_cursor; k--) {
+        cmd_buf[k] = cmd_buf[k - 1];
+    }
+    cmd_buf[*cmd_cursor] = ch;
+    (*cmd_len)++;
+
+    int redraw = *cursor;
+    for (int k = 0; k < *cmd_len - *cmd_cursor; k++) {
+        if (redraw + k >= 80 * 25) break;
+        video[(redraw + k) * 2] = cmd_buf[*cmd_cursor + k];
+        video[(redraw + k) * 2 + 1] = 0x0F;
+    }
+
+    (*cursor)++;
+    (*cmd_cursor)++;
+    set_cursor_position(*cursor);
+}
+
 // Reusable shell_read_line for login and prompts
 void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cursor) {
     // Move cursor to new line for prompt
@@ -394,12 +449,15 @@ void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cur
     int len = 0;
     int cmd_cursor = 0;
     int shift = 0;
+    int ctrl = 0;
     int e0_prefix_pending = 0;
     while (1) {
         unsigned char scancode;
         if (!keyboard_pop_scancode(&scancode)) continue;
         if (scancode == 0x2A || scancode == 0x36) { shift = 1; continue; }
         if (scancode == 0xAA || scancode == 0xB6) { shift = 0; continue; }
+        if (scancode == 0x1D) { ctrl = 1; continue; }
+        if (scancode == 0x9D) { ctrl = 0; continue; }
 
         if (scancode == 0xE0) {
             e0_prefix_pending = 1;
@@ -414,7 +472,25 @@ void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cur
             else continue;
         }
 
-        if (scancode > 0x80) continue;
+        if (scancode & 0x80) continue;
+
+        if (ctrl && scancode == 0x2E) {
+            clipboard_set_text_len(buf, len);
+            continue;
+        }
+
+        if (ctrl && scancode == 0x2F) {
+            const char* clip = clipboard_get_text();
+            int clip_len = clipboard_get_length();
+            for (int i = 0; i < clip_len; i++) {
+                char pc = clip[i];
+                if (pc >= 32 && pc <= 126) {
+                    shell_insert_char_at_cursor(pc, buf, &len, &cmd_cursor, max_len, video, cursor, &line_start);
+                }
+            }
+            continue;
+        }
+
         char c = scancode_to_char(scancode, shift);
         if (!c) continue;
         if (c == '\n') break;
@@ -433,14 +509,8 @@ void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cur
             set_cursor_position(*cursor);
             continue;
         }
-        if (c >= 32 && c <= 126 && len < max_len-1) {
-            buf[cmd_cursor] = c;
-            len++;
-            cmd_cursor++;
-            (*cursor)++;
-            video[(*cursor-1)*2] = c;
-            video[(*cursor-1)*2+1] = 0x0F;
-            set_cursor_position(*cursor);
+        if (c >= 32 && c <= 126) {
+            shell_insert_char_at_cursor(c, buf, &len, &cmd_cursor, max_len, video, cursor, &line_start);
         }
     }
     buf[len] = 0;
@@ -489,6 +559,7 @@ void kernel_main(void) {
     unsigned char prev_scancode = 0;
     int e0_prefix_pending = 0;
     int shift = 0;
+    int ctrl = 0;
 
     
     for (int i = 0; i < 80*25*2; i += 2) {
@@ -556,7 +627,7 @@ void kernel_main(void) {
             display_restore_live_screen(video);
         }
 
-        //SHIFT KEYS
+        //SHIFT/CTRL KEYS
         if (scancode == 0x2A || scancode == 0x36) { 
             shift = 1;
             display_refresh_mouse(video);
@@ -564,6 +635,17 @@ void kernel_main(void) {
         }
         if (scancode == 0xAA || scancode == 0xB6) { 
             shift = 0;
+            display_refresh_mouse(video);
+            continue;
+        }
+        if (scancode == 0x1D) {
+            ctrl = 1;
+            display_refresh_mouse(video);
+            continue;
+        }
+        if (scancode == 0x9D) {
+            ctrl = 0;
+            prev_scancode = 0;
             display_refresh_mouse(video);
             continue;
         }
@@ -739,6 +821,32 @@ void kernel_main(void) {
 
         char c = scancode_to_char(scancode, shift);
 
+        if (ctrl && scancode == 0x2E) {
+            clipboard_set_text_len(cmd_buf, cmd_len);
+            display_sync_live_screen(video);
+            display_refresh_mouse(video);
+            continue;
+        }
+
+        if (ctrl && scancode == 0x2F) {
+            const char* clip = clipboard_get_text();
+            int clip_len = clipboard_get_length();
+
+            tab_completion_active = 0;
+            tab_completion_position = -1;
+
+            for (int i = 0; i < clip_len; i++) {
+                char pc = clip[i];
+                if (pc >= 32 && pc <= 126) {
+                    shell_insert_char_at_cursor(pc, cmd_buf, &cmd_len, &cmd_cursor, MAX_CMD_BUFFER, video, &cursor, &line_start);
+                }
+            }
+
+            display_sync_live_screen(video);
+            display_refresh_mouse(video);
+            continue;
+        }
+
         if (c) {
             // Any key press deactivates tab completion mode
             if (c != '\t' && c != '\n') {
@@ -807,53 +915,8 @@ void kernel_main(void) {
                 }
             }
             else {
-                if (c != '\t' && cmd_len < (MAX_CMD_BUFFER - 1)) {
-                    if (cmd_cursor == cmd_len) {
-                        if (cursor >= 80*25) {
-                            scroll_screen(video);
-                            cursor -= 80;
-                            if (line_start >= 80) line_start -= 80;
-                            else line_start = 0;
-                        }
-
-                        video[cursor*2] = c;
-                        video[cursor*2+1] = 0x0F;
-                        cmd_buf[cmd_cursor] = c;
-                        cmd_len++;
-                        cmd_cursor++;
-                        cursor++;
-
-                        if (cursor >= 80*25) {
-                            scroll_screen(video);
-                            cursor -= 80;
-                            if (line_start >= 80) line_start -= 80;
-                            else line_start = 0;
-                        }
-
-                        set_cursor_position(cursor);
-                    } else {
-                        if (cursor >= 80*25) {
-                            scroll_screen(video);
-                            cursor -= 80;
-                            if (line_start >= 80) line_start -= 80;
-                            else line_start = 0;
-                        }
-
-                        for (int k = cmd_len; k > cmd_cursor; k--)
-                            cmd_buf[k] = cmd_buf[k-1];
-                        cmd_buf[cmd_cursor] = c;
-                        cmd_len++;
-
-                        int redraw = cursor;
-                        for (int k = 0; k < cmd_len-cmd_cursor; k++) {
-                            if (redraw + k >= 80*25) break;
-                            video[(redraw+k)*2] = cmd_buf[cmd_cursor+k];
-                            video[(redraw+k)*2+1] = 0x0F;
-                        }
-                        cursor++;
-                        cmd_cursor++;
-                        set_cursor_position(cursor);
-                    }
+                if (c != '\t') {
+                    shell_insert_char_at_cursor(c, cmd_buf, &cmd_len, &cmd_cursor, MAX_CMD_BUFFER, video, &cursor, &line_start);
                 }
             }
         }

@@ -5,6 +5,56 @@
 
 static char editor_work_buf[MAX_FILE_CONTENT];
 
+static void editor_copy_current_line(const char* buf, int len, int cursor_index) {
+    int line_start;
+    int line_end;
+
+    if (!buf || len <= 0) {
+        clipboard_clear();
+        return;
+    }
+
+    if (cursor_index < 0) cursor_index = 0;
+    if (cursor_index > len) cursor_index = len;
+
+    line_start = cursor_index;
+    while (line_start > 0 && buf[line_start - 1] != '\n') line_start--;
+
+    line_end = cursor_index;
+    while (line_end < len && buf[line_end] != '\n') line_end++;
+    if (line_end < len && buf[line_end] == '\n') line_end++;
+
+    clipboard_set_text_len(buf + line_start, line_end - line_start);
+}
+
+static void editor_paste_clipboard(char* buf, int* len, int* cursor_index, int maxlen) {
+    const char* clip = clipboard_get_text();
+    int clip_len = clipboard_get_length();
+
+    if (!buf || !len || !cursor_index) return;
+    if (clip_len <= 0) return;
+
+    if (*cursor_index < 0) *cursor_index = 0;
+    if (*cursor_index > *len) *cursor_index = *len;
+
+    if (*len + clip_len > maxlen) {
+        clip_len = maxlen - *len;
+    }
+
+    if (clip_len <= 0) return;
+
+    for (int i = *len + clip_len - 1; i >= *cursor_index + clip_len; i--) {
+        buf[i] = buf[i - clip_len];
+    }
+    for (int i = 0; i < clip_len; i++) {
+        buf[*cursor_index + i] = clip[i];
+    }
+
+    *len += clip_len;
+    *cursor_index += clip_len;
+    buf[*len] = 0;
+}
+
 static void logical_pos_for_index(const char* buf, int index, int* out_row, int* out_col) {
     int row = 0;
     int col = 0;
@@ -156,7 +206,7 @@ void nano_editor(const char* filename, char* video, int* cursor) {
     }
     int header_cursor = 0;
     print_string("--- Smiggles Editor ---", -1, video, &header_cursor, COLOR_BROWN);
-    print_string("Ctrl+S: Save | Ctrl+Q: Quit", -1, video, &header_cursor, COLOR_LIGHT_GRAY);
+    print_string("Ctrl+S: Save | Ctrl+Q: Quit | Ctrl+C: Line | Ctrl+W: Word | Ctrl+V: Paste", -1, video, &header_cursor, COLOR_LIGHT_GRAY);
     int edit_start = 240;
     int logical_row = 0, logical_col = 0;
     int draw_cursor = edit_start;
@@ -267,6 +317,18 @@ void nano_editor(const char* filename, char* video, int* cursor) {
         prev_scancode = scancode;
         if (scancode == 0x2A || scancode == 0x36) { shift = 1; continue; }
         if (scancode == 0x1D) { ctrl = 1; continue; }
+        if (ctrl && scancode == 0x2E) { // Ctrl+C: copy current line
+            editor_copy_current_line(buf, len, cursor_index);
+            continue;
+        }
+        if (ctrl && scancode == 0x11) { // Ctrl+W: copy current word
+            clipboard_copy_word_at(buf, len, cursor_index);
+            continue;
+        }
+        if (ctrl && scancode == 0x2F) { // Ctrl+V: paste clipboard
+            editor_paste_clipboard(buf, &len, &cursor_index, maxlen);
+            continue;
+        }
         if (ctrl && scancode == 0x1F) { // Ctrl+S: Save
             if (len < 0) len = 0;
             if (len > maxlen) {

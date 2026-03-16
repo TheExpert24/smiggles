@@ -354,6 +354,15 @@ int mini_strcmp(const char* a, const char* b);
 void int_to_str(int value, char* buf);
 void str_concat(char* dest, const char* src);
 
+// Clipboard
+void clipboard_clear(void);
+int clipboard_set_text(const char* text);
+int clipboard_set_text_len(const char* text, int len);
+const char* clipboard_get_text(void);
+int clipboard_get_length(void);
+int clipboard_has_text(void);
+int clipboard_copy_word_at(const char* text, int len, int cursor_index);
+
 // Panic handling
 void kernel_panic(const char* reason, const char* detail);
 void exception_handler(unsigned int vector, unsigned int error_code, unsigned int eip, unsigned int cs, unsigned int eflags);

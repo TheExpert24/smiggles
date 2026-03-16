@@ -39,6 +39,9 @@ editor.o: editor.c
 commands.o: commands.c
 	$(CC) -ffreestanding -c commands.c -o commands.o
 
+clipboard.o: clipboard.c
+	$(CC) -ffreestanding -c clipboard.c -o clipboard.o
+
 diskio.o: diskio.c
 	$(CC) -ffreestanding -c diskio.c -o diskio.o
 
@@ -78,8 +81,8 @@ tcp.o: tcp.c
 sockets.o: sockets.c
 	$(CC) -ffreestanding -c sockets.c -o sockets.o
 
-kernel.bin: kernel_entry.o kernel.o interrupts.o memory.o filesystem.o display.o calculator.o basic.o editor.o commands.o diskio.o ata.o process.o syscall.o protection.o pci.o rtl8139.o arp.o ipv4.o icmp.o udp.o net.o tcp.o sockets.o
-	$(LD) -Ttext 0x10000 kernel_entry.o kernel.o interrupts.o memory.o filesystem.o display.o calculator.o basic.o editor.o commands.o diskio.o ata.o process.o syscall.o protection.o pci.o rtl8139.o arp.o ipv4.o icmp.o udp.o net.o tcp.o sockets.o -o kernel.bin --oformat binary
+kernel.bin: kernel_entry.o kernel.o interrupts.o memory.o filesystem.o display.o calculator.o basic.o editor.o commands.o clipboard.o diskio.o ata.o process.o syscall.o protection.o pci.o rtl8139.o arp.o ipv4.o icmp.o udp.o net.o tcp.o sockets.o
+	$(LD) -Ttext 0x10000 kernel_entry.o kernel.o interrupts.o memory.o filesystem.o display.o calculator.o basic.o editor.o commands.o clipboard.o diskio.o ata.o process.o syscall.o protection.o pci.o rtl8139.o arp.o ipv4.o icmp.o udp.o net.o tcp.o sockets.o -o kernel.bin --oformat binary
 process.o: process.c
 	$(CC) -ffreestanding -c process.c -o process.o
 
