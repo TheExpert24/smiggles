@@ -3331,14 +3331,18 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
             "sock list - list open sockets\n"
             "udpecho start <port> - start UDP echo server\n"
             "udpecho run <count> - pump echo server N steps\n"
-            "udpecho stop - stop UDP echo server\n"
+            "udpecho stop - stop UDP echo server\n",
+            -1, video, cursor, COLOR_LIGHT_MAGENTA);
+
+        print_string(
+            "---Package manager---\n"
             "pkg repo <ip> <port> - set package repo\n"
             "pkg search - list packages from repo\n"
             "pkg install <name> [path] - install package from repo\n"
             "pkg install <ip> <port> <name> [path] - legacy install form\n"
             "pkg list - list installed packages\n"
             "pkg remove <name> - uninstall package\n",
-            -1, video, cursor, COLOR_LIGHT_MAGENTA);
+            -1, video, cursor, COLOR_YELLOW);
 
         print_string(
             "---User authentication---\n"
@@ -3346,7 +3350,6 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
             "login - log in with username/password\n"
             "logout - log out\n"
             "edituser - edit account information\n"
-            "---Admin-only commands---\n"
             "adduser - add new user"
             "deluser - delete user\n"
             "listusers - list all users\n"
