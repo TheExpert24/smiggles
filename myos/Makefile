@@ -90,7 +90,7 @@ floppy.img: boot.bin kernel.bin
 hdd.img:
 	@ if [ ! -f hdd.img ]; then qemu-img create -f raw hdd.img 10M; fi
 run: floppy.img hdd.img
-	$(QEMU) -fda floppy.img -hda hdd.img -serial stdio -net nic,model=rtl8139 -net user,hostfwd=udp::5555-:5555,hostfwd=tcp::8080-:8080
+	$(QEMU) -fda floppy.img -hda hdd.img -serial stdio -net nic,model=rtl8139 -net user,hostfwd=udp::5556-:5555,hostfwd=tcp::8080-:8080
 
 clean:
 	rm -f *.o *.bin *.img

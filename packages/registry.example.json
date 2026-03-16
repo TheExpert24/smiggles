@@ -1,0 +1,12 @@
+{
+  "packages": {
+    "hello": "hello.bas",
+    "clock": "clock.bas",
+    "todo": {
+      "url": "https://raw.githubusercontent.com/<owner>/<repo>/main/packages/todo.bas"
+    },
+    "notes": {
+      "url": "https://raw.githubusercontent.com/<owner>/<repo>/main/packages/notes.bas"
+    }
+  }
+}

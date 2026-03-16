@@ -10,9 +10,34 @@ typedef struct {
 } SockEntry;
 
 static SockEntry sock_table[SOCK_MAX];
+static uint16_t sock_next_ephemeral = SOCK_EPHEMERAL_BASE;
 
 static int sock_valid_fd(int fd) {
     return fd >= 0 && fd < SOCK_MAX && sock_table[fd].in_use;
+}
+
+static uint16_t sock_allocate_ephemeral_port(void) {
+    for (int attempts = 0; attempts < 16384; attempts++) {
+        uint16_t candidate = sock_next_ephemeral;
+        int in_use = 0;
+
+        sock_next_ephemeral++;
+        if (sock_next_ephemeral < SOCK_EPHEMERAL_BASE || sock_next_ephemeral == 0) {
+            sock_next_ephemeral = SOCK_EPHEMERAL_BASE;
+        }
+
+        for (int i = 0; i < SOCK_MAX; i++) {
+            if (!sock_table[i].in_use) continue;
+            if (sock_table[i].local_port == candidate) {
+                in_use = 1;
+                break;
+            }
+        }
+
+        if (!in_use) return candidate;
+    }
+
+    return SOCK_EPHEMERAL_BASE;
 }
 
 int sock_open_udp(void) {
@@ -20,7 +45,7 @@ int sock_open_udp(void) {
         if (!sock_table[i].in_use) {
             sock_table[i].in_use = 1;
             sock_table[i].type = SOCK_TYPE_UDP;
-            sock_table[i].local_port = (uint16_t)(SOCK_EPHEMERAL_BASE + i);
+            sock_table[i].local_port = sock_allocate_ephemeral_port();
             return i;
         }
     }
@@ -57,15 +82,19 @@ int sock_recvfrom(int fd, uint8_t src_ip_out[4], uint16_t* src_port_out, uint8_t
     if (!sock_valid_fd(fd)) return -1;
     if (sock_table[fd].type != SOCK_TYPE_UDP) return -2;
 
-    // Try queue first, then poll several frames so ARP+UDP can resolve in one recv call.
+    // Poll the NIC with a busy-wait delay between each attempt.
+    // net_poll_once() returns 0 immediately when the RX buffer is empty, so
+    // without a delay the loop burns through in microseconds before QEMU's
+    // virtual network stack has time to deliver the UDP reply (~1-5 ms round trip).
     r = udp_recv_next_for_port(sock_table[fd].local_port, src_ip_out, src_port_out, &dst_port, payload_out, max_payload, out_payload_len);
     if (r != 0) return r;
 
-    for (int i = 0; i < 6; i++) {
-        int p = net_poll_once();
+    for (int i = 0; i < 32768; i++) {
+        net_poll_once();
+        /* ~1 us busy delay per iteration, 32768 iters = ~32 ms max wait */
+        for (volatile int d = 0; d < 500; d++) ;
         r = udp_recv_next_for_port(sock_table[fd].local_port, src_ip_out, src_port_out, &dst_port, payload_out, max_payload, out_payload_len);
         if (r != 0) return r;
-        if (p <= 0) break;
     }
 
     return 0;
@@ -73,6 +102,7 @@ int sock_recvfrom(int fd, uint8_t src_ip_out[4], uint16_t* src_port_out, uint8_t
 
 int sock_close(int fd) {
     if (!sock_valid_fd(fd)) return -1;
+    udp_discard_for_port(sock_table[fd].local_port);
     sock_table[fd].in_use = 0;
     sock_table[fd].type = 0;
     sock_table[fd].local_port = 0;

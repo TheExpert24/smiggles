@@ -632,6 +632,802 @@ static int parse_ipv4_text(const char* s, uint8_t out_ip[4]) {
     return 1;
 }
 
+#define PKG_DB_PATH "/.pkgdb"
+#define PKG_REPO_PATH "/.pkgrepo"
+#define PKG_MAX_RECV 512
+#define PKG_CHUNK_SIZE 384
+
+static const char* skip_spaces(const char* s) {
+    while (s && *s == ' ') s++;
+    return s;
+}
+
+static int read_token(const char** input, char* out, int out_max) {
+    const char* s = skip_spaces(*input);
+    int i = 0;
+
+    if (!s || !out || out_max <= 1 || *s == 0) return 0;
+
+    while (*s && *s != ' ' && i < out_max - 1) {
+        out[i++] = *s++;
+    }
+    out[i] = 0;
+    *input = skip_spaces(s);
+    return i > 0;
+}
+
+static void append_bounded(char* dst, int dst_max, const char* src) {
+    int d = 0;
+    int s = 0;
+
+    if (!dst || !src || dst_max <= 1) return;
+
+    while (dst[d] && d < dst_max - 1) d++;
+    while (src[s] && d < dst_max - 1) {
+        dst[d++] = src[s++];
+    }
+    dst[d] = 0;
+}
+
+static void append_char_bounded(char* dst, int dst_max, char c) {
+    int d = 0;
+    if (!dst || dst_max <= 1) return;
+    while (dst[d] && d < dst_max - 1) d++;
+    if (d < dst_max - 1) {
+        dst[d++] = c;
+        dst[d] = 0;
+    }
+}
+
+static void pkg_db_read(char* out, int out_max) {
+    int idx;
+    int len;
+
+    if (!out || out_max <= 1) return;
+    out[0] = 0;
+
+    idx = resolve_path(PKG_DB_PATH);
+    if (idx < 0 || idx >= MAX_NODES) return;
+    if (!node_table[idx].used || node_table[idx].type != NODE_FILE) return;
+
+    len = node_table[idx].content_size;
+    if (len < 0) len = 0;
+    if (len > out_max - 1) len = out_max - 1;
+
+    for (int i = 0; i < len; i++) out[i] = node_table[idx].content[i];
+    out[len] = 0;
+}
+
+static int pkg_db_write(const char* content) {
+    int result = fs_touch(PKG_DB_PATH, content ? content : "");
+    return result >= 0;
+}
+
+static void pkg_repo_read_raw(char* out, int out_max) {
+    int idx;
+    int len;
+
+    if (!out || out_max <= 1) return;
+    out[0] = 0;
+
+    idx = resolve_path(PKG_REPO_PATH);
+    if (idx < 0 || idx >= MAX_NODES) return;
+    if (!node_table[idx].used || node_table[idx].type != NODE_FILE) return;
+
+    len = node_table[idx].content_size;
+    if (len < 0) len = 0;
+    if (len > out_max - 1) len = out_max - 1;
+    for (int i = 0; i < len; i++) out[i] = node_table[idx].content[i];
+    out[len] = 0;
+}
+
+static int pkg_repo_write(const char* ip_text, int port) {
+    char line[64];
+    char port_text[16];
+    line[0] = 0;
+    append_bounded(line, sizeof(line), ip_text);
+    append_char_bounded(line, sizeof(line), ' ');
+    int_to_str(port, port_text);
+    append_bounded(line, sizeof(line), port_text);
+    return fs_touch(PKG_REPO_PATH, line) >= 0;
+}
+
+static int pkg_repo_get(char* out_ip_text, int out_ip_max, int* out_port) {
+    char raw[64];
+    const char* p;
+    char ip_text[20];
+    char port_text[12];
+    int port = 0;
+
+    if (!out_ip_text || !out_port || out_ip_max <= 1) return 0;
+
+    pkg_repo_read_raw(raw, sizeof(raw));
+    if (raw[0]) {
+        p = raw;
+        if (read_token(&p, ip_text, sizeof(ip_text)) &&
+            read_token(&p, port_text, sizeof(port_text)) &&
+            parse_ipv4_text(ip_text, (uint8_t[4]){0, 0, 0, 0}) &&
+            parse_nonneg_int(port_text, &port) &&
+            port >= 1 && port <= 65535) {
+            str_copy(out_ip_text, ip_text, out_ip_max);
+            *out_port = port;
+            return 1;
+        }
+    }
+
+    str_copy(out_ip_text, "10.0.2.2", out_ip_max);
+    *out_port = 5555;
+    return 1;
+}
+
+static int pkg_db_get_path(const char* package_name, char* out_path, int out_max) {
+    char db[MAX_FILE_CONTENT];
+    int i = 0;
+
+    if (!package_name || !out_path || out_max <= 1) return 0;
+    out_path[0] = 0;
+    pkg_db_read(db, sizeof(db));
+
+    while (db[i]) {
+        char name[MAX_NAME_LENGTH];
+        char path[MAX_PATH_LENGTH];
+        int ni = 0;
+        int pi = 0;
+
+        while (db[i] == ' ') i++;
+        if (db[i] == 0) break;
+        while (db[i] && db[i] != ' ' && db[i] != '\n' && ni < MAX_NAME_LENGTH - 1) {
+            name[ni++] = db[i++];
+        }
+        name[ni] = 0;
+
+        while (db[i] == ' ') i++;
+        while (db[i] && db[i] != '\n' && pi < MAX_PATH_LENGTH - 1) {
+            path[pi++] = db[i++];
+        }
+        path[pi] = 0;
+
+        while (db[i] == '\n') i++;
+
+        if (name[0] && path[0] && mini_strcmp(name, package_name) == 0) {
+            str_copy(out_path, path, out_max);
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int pkg_db_set_entry(const char* package_name, const char* install_path) {
+    char old_db[MAX_FILE_CONTENT];
+    char new_db[MAX_FILE_CONTENT];
+    int i = 0;
+    int replaced = 0;
+
+    if (!package_name || !install_path || !package_name[0] || !install_path[0]) return 0;
+
+    pkg_db_read(old_db, sizeof(old_db));
+    new_db[0] = 0;
+
+    while (old_db[i]) {
+        char name[MAX_NAME_LENGTH];
+        char path[MAX_PATH_LENGTH];
+        int ni = 0;
+        int pi = 0;
+
+        while (old_db[i] == ' ') i++;
+        if (old_db[i] == 0) break;
+
+        while (old_db[i] && old_db[i] != ' ' && old_db[i] != '\n' && ni < MAX_NAME_LENGTH - 1) {
+            name[ni++] = old_db[i++];
+        }
+        name[ni] = 0;
+
+        while (old_db[i] == ' ') i++;
+        while (old_db[i] && old_db[i] != '\n' && pi < MAX_PATH_LENGTH - 1) {
+            path[pi++] = old_db[i++];
+        }
+        path[pi] = 0;
+
+        while (old_db[i] == '\n') i++;
+
+        if (!name[0] || !path[0]) continue;
+
+        if (mini_strcmp(name, package_name) == 0) {
+            if (!replaced) {
+                append_bounded(new_db, sizeof(new_db), package_name);
+                append_char_bounded(new_db, sizeof(new_db), ' ');
+                append_bounded(new_db, sizeof(new_db), install_path);
+                append_char_bounded(new_db, sizeof(new_db), '\n');
+                replaced = 1;
+            }
+        } else {
+            append_bounded(new_db, sizeof(new_db), name);
+            append_char_bounded(new_db, sizeof(new_db), ' ');
+            append_bounded(new_db, sizeof(new_db), path);
+            append_char_bounded(new_db, sizeof(new_db), '\n');
+        }
+    }
+
+    if (!replaced) {
+        append_bounded(new_db, sizeof(new_db), package_name);
+        append_char_bounded(new_db, sizeof(new_db), ' ');
+        append_bounded(new_db, sizeof(new_db), install_path);
+        append_char_bounded(new_db, sizeof(new_db), '\n');
+    }
+
+    return pkg_db_write(new_db);
+}
+
+static int pkg_db_remove_entry(const char* package_name) {
+    char old_db[MAX_FILE_CONTENT];
+    char new_db[MAX_FILE_CONTENT];
+    int i = 0;
+    int removed = 0;
+
+    if (!package_name || !package_name[0]) return 0;
+
+    pkg_db_read(old_db, sizeof(old_db));
+    new_db[0] = 0;
+
+    while (old_db[i]) {
+        char name[MAX_NAME_LENGTH];
+        char path[MAX_PATH_LENGTH];
+        int ni = 0;
+        int pi = 0;
+
+        while (old_db[i] == ' ') i++;
+        if (old_db[i] == 0) break;
+
+        while (old_db[i] && old_db[i] != ' ' && old_db[i] != '\n' && ni < MAX_NAME_LENGTH - 1) {
+            name[ni++] = old_db[i++];
+        }
+        name[ni] = 0;
+
+        while (old_db[i] == ' ') i++;
+        while (old_db[i] && old_db[i] != '\n' && pi < MAX_PATH_LENGTH - 1) {
+            path[pi++] = old_db[i++];
+        }
+        path[pi] = 0;
+
+        while (old_db[i] == '\n') i++;
+
+        if (!name[0] || !path[0]) continue;
+
+        if (mini_strcmp(name, package_name) == 0) {
+            removed = 1;
+            continue;
+        }
+
+        append_bounded(new_db, sizeof(new_db), name);
+        append_char_bounded(new_db, sizeof(new_db), ' ');
+        append_bounded(new_db, sizeof(new_db), path);
+        append_char_bounded(new_db, sizeof(new_db), '\n');
+    }
+
+    if (!removed) return 0;
+    return pkg_db_write(new_db);
+}
+
+static int pkg_exchange(const uint8_t server_ip[4], int server_port, const char* request, uint8_t* payload, int payload_max, int* out_payload_len) {
+    int fd;
+    int send_result;
+    int recv_result = 0;
+    int init_result;
+    uint8_t src_ip[4];
+    uint16_t src_port = 0;
+    int payload_len = 0;
+    uint8_t local_ip[4] = {10, 0, 2, 15};
+    Rtl8139Status nic_status;
+
+    if (!server_ip || !request || !payload || !out_payload_len || payload_max <= 0) return -1;
+    *out_payload_len = 0;
+
+    if (!arp_get_local_ip(src_ip)) {
+        arp_set_local_ip(local_ip);
+    }
+
+    if (!rtl8139_get_status(&nic_status) || !nic_status.initialized) {
+        init_result = rtl8139_init();
+        if (init_result <= 0) {
+            return -6;
+        }
+    }
+
+    fd = sock_open_udp();
+    if (fd < 0) return -2;
+
+    send_result = sock_sendto(fd, server_ip, (uint16_t)server_port, (const uint8_t*)request, str_len(request));
+    if (send_result == -4) {
+        for (int attempt = 0; attempt < 6 && send_result == -4; attempt++) {
+            arp_send_request(server_ip);
+            for (int i = 0; i < 8192; i++) {
+                net_poll_once();
+                for (volatile int d = 0; d < 500; d++) ;
+            }
+            send_result = sock_sendto(fd, server_ip, (uint16_t)server_port, (const uint8_t*)request, str_len(request));
+        }
+    }
+
+    if (send_result <= 0) {
+        sock_close(fd);
+        return send_result == -4 ? -4 : -3;
+    }
+
+// One shot: sock_recvfrom now spins 8192 NIC polls internally, which is
+    // enough to cover QEMU's virtual network round-trip without retransmitting.
+    recv_result = sock_recvfrom(fd, src_ip, &src_port, payload, payload_max, &payload_len);
+    if (recv_result <= 0) {
+        // One retry: resend and spin again.
+        int rs = sock_sendto(fd, server_ip, (uint16_t)server_port, (const uint8_t*)request, str_len(request));
+        if (rs == -4) {
+            arp_send_request(server_ip);
+            for (int i = 0; i < 8192; i++) {
+                net_poll_once();
+                for (volatile int d = 0; d < 500; d++) ;
+            }
+            (void)sock_sendto(fd, server_ip, (uint16_t)server_port, (const uint8_t*)request, str_len(request));
+        }
+        recv_result = sock_recvfrom(fd, src_ip, &src_port, payload, payload_max, &payload_len);
+    }
+
+    sock_close(fd);
+
+    if (recv_result <= 0) return -5;
+    if (payload_len < 0) payload_len = 0;
+    if (payload_len > payload_max) payload_len = payload_max;
+    *out_payload_len = payload_len;
+    return 1;
+}
+
+static int parse_nonneg_int_prefix(const char* s, int* out, int* consumed) {
+    int i = 0;
+    int value = 0;
+
+    if (!s || !out || !consumed) return 0;
+    if (s[0] < '0' || s[0] > '9') return 0;
+
+    while (s[i] >= '0' && s[i] <= '9') {
+        value = value * 10 + (s[i] - '0');
+        i++;
+    }
+
+    *out = value;
+    *consumed = i;
+    return 1;
+}
+
+static int pkg_parse_chunk_reply(const uint8_t* payload, int payload_len, int* out_data_offset, int* out_chunk_len) {
+    int number = 0;
+    int consumed = 0;
+    int idx;
+
+    if (!payload || !out_data_offset || !out_chunk_len) return 0;
+    if (payload_len < 6) return 0;
+    if (!(payload[0] == 'O' && payload[1] == 'K' && payload[2] == ' ')) return 0;
+
+    if (!parse_nonneg_int_prefix((const char*)(payload + 3), &number, &consumed)) return 0;
+    idx = 3 + consumed;
+    if (idx >= payload_len || payload[idx] != '\n') return 0;
+    idx++;
+
+    if (number < 0) return 0;
+    if (idx + number > payload_len) return 0;
+
+    *out_data_offset = idx;
+    *out_chunk_len = number;
+    return 1;
+}
+
+static void pkg_print_repo(char* video, int* cursor) {
+    char ip_text[20];
+    int port = 0;
+    char line[64];
+    char port_text[16];
+
+    if (!pkg_repo_get(ip_text, sizeof(ip_text), &port)) {
+        print_string("PKG repo: unavailable", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    line[0] = 0;
+    str_concat(line, "PKG repo: ");
+    str_concat(line, ip_text);
+    str_concat(line, ":");
+    int_to_str(port, port_text);
+    str_concat(line, port_text);
+    print_string(line, -1, video, cursor, COLOR_LIGHT_CYAN);
+}
+
+static void handle_pkg_repo_command(const char* args, char* video, int* cursor) {
+    const char* p = args;
+    char a[20];
+    char b[12];
+    int port = 0;
+    uint8_t ip[4];
+
+    if (!read_token(&p, a, sizeof(a))) {
+        pkg_print_repo(video, cursor);
+        return;
+    }
+
+    if (mini_strcmp(a, "show") == 0) {
+        pkg_print_repo(video, cursor);
+        return;
+    }
+
+    if (mini_strcmp(a, "set") == 0) {
+        if (!read_token(&p, a, sizeof(a)) || !read_token(&p, b, sizeof(b))) {
+            print_string("Usage: pkg repo <ip> <port>", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+    } else {
+        if (!read_token(&p, b, sizeof(b))) {
+            print_string("Usage: pkg repo <ip> <port>", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+    }
+
+    if (!parse_ipv4_text(a, ip) || !parse_nonneg_int(b, &port) || port < 1 || port > 65535) {
+        print_string("PKG repo: invalid IP/port", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    if (!pkg_repo_write(a, port)) {
+        print_string("PKG repo: save failed", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    print_string("PKG repo saved", -1, video, cursor, COLOR_LIGHT_GREEN);
+    pkg_print_repo(video, cursor);
+}
+
+static void handle_pkg_install_command(const char* args, char* video, int* cursor) {
+    const char* p = args;
+    char ip_text[20];
+    char port_text[12];
+    char tok1[32];
+    char tok2[32];
+    char tok3[32];
+    char package_name[MAX_NAME_LENGTH];
+    char request_package_name[MAX_NAME_LENGTH];
+    char install_path[MAX_PATH_LENGTH];
+    uint8_t server_ip[4];
+    int server_port = 0;
+    uint8_t payload[PKG_MAX_RECV + 1];
+    int payload_len = 0;
+    char file_content[MAX_FILE_CONTENT];
+    int installed_len = 0;
+    int xchg;
+    int slash_pos = -1;
+    int tried_name_fallback = 0;
+
+    if (!read_token(&p, tok1, sizeof(tok1))) {
+        print_string("Usage: pkg install <name> [path]", -1, video, cursor, COLOR_LIGHT_RED);
+        print_string("Legacy: pkg install <ip> <port> <name> [path]", -1, video, cursor, COLOR_YELLOW);
+        return;
+    }
+
+    tok2[0] = 0;
+    tok3[0] = 0;
+    read_token(&p, tok2, sizeof(tok2));
+    read_token(&p, tok3, sizeof(tok3));
+
+    if (!tok2[0] && !tok3[0]) {
+        for (int i = 0; tok1[i]; i++) {
+            if (tok1[i] == '/') {
+                slash_pos = i;
+                break;
+            }
+        }
+        if (slash_pos > 0) {
+            int n = 0;
+            while (n < slash_pos && n < (int)sizeof(package_name) - 1) {
+                package_name[n] = tok1[n];
+                n++;
+            }
+            package_name[n] = 0;
+            str_copy(request_package_name, package_name, sizeof(request_package_name));
+            str_copy(install_path, tok1 + slash_pos, sizeof(install_path));
+
+            pkg_repo_get(ip_text, sizeof(ip_text), &server_port);
+            if (!parse_ipv4_text(ip_text, server_ip) || server_port < 1 || server_port > 65535) {
+                print_string("PKG: no valid repo configured", -1, video, cursor, COLOR_LIGHT_RED);
+                return;
+            }
+
+            {
+                char line[96];
+                char val[16];
+                line[0] = 0;
+                str_concat(line, "PKG: using repo ");
+                str_concat(line, ip_text);
+                str_concat(line, ":");
+                int_to_str(server_port, val);
+                str_concat(line, val);
+                print_string(line, -1, video, cursor, COLOR_LIGHT_GRAY);
+            }
+
+            goto pkg_install_transfer;
+        }
+    }
+
+    if (tok3[0] && parse_ipv4_text(tok1, server_ip) && parse_nonneg_int(tok2, &server_port) && server_port >= 1 && server_port <= 65535) {
+        str_copy(ip_text, tok1, sizeof(ip_text));
+        str_copy(port_text, tok2, sizeof(port_text));
+        str_copy(package_name, tok3, sizeof(package_name));
+        str_copy(request_package_name, package_name, sizeof(request_package_name));
+        if (!read_token(&p, install_path, sizeof(install_path))) {
+            str_copy(install_path, package_name, sizeof(install_path));
+        }
+    } else {
+        str_copy(package_name, tok1, sizeof(package_name));
+        str_copy(request_package_name, package_name, sizeof(request_package_name));
+        if (tok2[0]) str_copy(install_path, tok2, sizeof(install_path));
+        else str_copy(install_path, package_name, sizeof(install_path));
+
+        pkg_repo_get(ip_text, sizeof(ip_text), &server_port);
+        if (!parse_ipv4_text(ip_text, server_ip) || server_port < 1 || server_port > 65535) {
+            print_string("PKG: no valid repo configured", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+
+        {
+            char line[96];
+            char val[16];
+            line[0] = 0;
+            str_concat(line, "PKG: using repo ");
+            str_concat(line, ip_text);
+            str_concat(line, ":");
+            int_to_str(server_port, val);
+            str_concat(line, val);
+            print_string(line, -1, video, cursor, COLOR_LIGHT_GRAY);
+        }
+    }
+
+pkg_install_transfer:
+
+    for (int offset = 0; offset < MAX_FILE_CONTENT - 1;) {
+        char request[128];
+        char num[16];
+        int data_offset = 0;
+        int chunk_len = 0;
+
+        request[0] = 0;
+        append_bounded(request, sizeof(request), "GETCHUNK ");
+        append_bounded(request, sizeof(request), request_package_name);
+        append_char_bounded(request, sizeof(request), ' ');
+        int_to_str(offset, num);
+        append_bounded(request, sizeof(request), num);
+        append_char_bounded(request, sizeof(request), ' ');
+        int_to_str(PKG_CHUNK_SIZE, num);
+        append_bounded(request, sizeof(request), num);
+
+        xchg = pkg_exchange(server_ip, server_port, request, payload, PKG_MAX_RECV, &payload_len);
+        if (xchg <= 0) {
+            if (!tried_name_fallback && offset == 0) {
+                int len = str_len(request_package_name);
+                if (len > 4 &&
+                    request_package_name[len - 4] == '.' &&
+                    request_package_name[len - 3] == 'b' &&
+                    request_package_name[len - 2] == 'a' &&
+                    request_package_name[len - 1] == 's') {
+                    request_package_name[len - 4] = 0;
+                    tried_name_fallback = 1;
+                    continue;
+                } else if (len + 4 < MAX_NAME_LENGTH) {
+                    str_concat(request_package_name, ".bas");
+                    tried_name_fallback = 1;
+                    continue;
+                }
+            }
+
+            char code[16];
+            int_to_str(xchg, code);
+            if (xchg == -6) {
+                print_string("PKG: network adapter init failed", -1, video, cursor, COLOR_LIGHT_RED);
+            } else if (xchg == -4) {
+                print_string("PKG: server MAC unknown (run arp whohas first)", -1, video, cursor, COLOR_YELLOW);
+            } else {
+                char line[64];
+                line[0] = 0;
+                str_concat(line, "PKG: request failed code=");
+                str_concat(line, code);
+                print_string(line, -1, video, cursor, COLOR_LIGHT_RED);
+            }
+            return;
+        }
+
+        if (payload_len < 0) payload_len = 0;
+        if (payload_len > PKG_MAX_RECV) payload_len = PKG_MAX_RECV;
+        payload[payload_len] = 0;
+
+        if (payload_len >= 4 && payload[0] == 'E' && payload[1] == 'R' && payload[2] == 'R' && payload[3] == ' ') {
+            print_string((const char*)payload, payload_len, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+
+        if (!pkg_parse_chunk_reply(payload, payload_len, &data_offset, &chunk_len)) {
+            print_string("PKG: invalid chunk reply", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+
+        if (chunk_len == 0) break;
+
+        if (installed_len + chunk_len > MAX_FILE_CONTENT - 1) {
+            print_string("PKG: package exceeds FS file size limit", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+
+        for (int i = 0; i < chunk_len; i++) {
+            file_content[installed_len + i] = (char)payload[data_offset + i];
+        }
+        installed_len += chunk_len;
+        offset += chunk_len;
+
+        if (chunk_len < PKG_CHUNK_SIZE) break;
+    }
+
+    if (installed_len <= 0) {
+        print_string("PKG: empty package payload", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    file_content[installed_len] = 0;
+
+    if (fs_touch(install_path, file_content) < 0) {
+        print_string("PKG: install write failed", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    if (!pkg_db_set_entry(package_name, install_path)) {
+        print_string("PKG: installed, but package index update failed", -1, video, cursor, COLOR_YELLOW);
+        return;
+    }
+
+    {
+        char line[128];
+        line[0] = 0;
+        str_concat(line, "PKG: installed ");
+        str_concat(line, package_name);
+        str_concat(line, " -> ");
+        str_concat(line, install_path);
+        print_string(line, -1, video, cursor, COLOR_LIGHT_GREEN);
+    }
+}
+
+static void handle_pkg_list_command(char* video, int* cursor) {
+    char db[MAX_FILE_CONTENT];
+    int i = 0;
+    int count = 0;
+
+    pkg_db_read(db, sizeof(db));
+    if (db[0] == 0) {
+        print_string("PKG: no installed packages", -1, video, cursor, COLOR_YELLOW);
+        return;
+    }
+
+    while (db[i]) {
+        char line[160];
+        int li = 0;
+
+        while (db[i] == '\n') i++;
+        if (db[i] == 0) break;
+
+        while (db[i] && db[i] != '\n' && li < (int)sizeof(line) - 1) {
+            line[li++] = db[i++];
+        }
+        line[li] = 0;
+        while (db[i] == '\n') i++;
+
+        if (line[0]) {
+            print_string(line, -1, video, cursor, COLOR_LIGHT_CYAN);
+            count++;
+        }
+    }
+
+    if (count == 0) {
+        print_string("PKG: no installed packages", -1, video, cursor, COLOR_YELLOW);
+    }
+}
+
+static void handle_pkg_search_command(char* video, int* cursor) {
+    char ip_text[20];
+    int port = 0;
+    uint8_t server_ip[4];
+    uint8_t payload[PKG_MAX_RECV + 1];
+    int payload_len = 0;
+    int xchg;
+    int i = 0;
+    int printed = 0;
+
+    if (!pkg_repo_get(ip_text, sizeof(ip_text), &port) || !parse_ipv4_text(ip_text, server_ip) || port < 1 || port > 65535) {
+        print_string("PKG: no valid repo configured", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    xchg = pkg_exchange(server_ip, port, "LIST", payload, PKG_MAX_RECV, &payload_len);
+    if (xchg <= 0) {
+        if (xchg == -6) {
+            print_string("PKG: network adapter init failed", -1, video, cursor, COLOR_LIGHT_RED);
+        } else {
+            char line[64];
+            char code[16];
+            int_to_str(xchg, code);
+            line[0] = 0;
+            str_concat(line, "PKG: repository query failed code=");
+            str_concat(line, code);
+            print_string(line, -1, video, cursor, COLOR_LIGHT_RED);
+        }
+        return;
+    }
+
+    payload[payload_len] = 0;
+    if (payload_len >= 4 && payload[0] == 'E' && payload[1] == 'R' && payload[2] == 'R' && payload[3] == ' ') {
+        print_string((const char*)payload, payload_len, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    if (payload_len >= 3 && payload[0] == 'O' && payload[1] == 'K' && (payload[2] == '\n' || payload[2] == ' ')) {
+        i = 3;
+    }
+
+    while (i < payload_len) {
+        char line[96];
+        int li = 0;
+        while (i < payload_len && (payload[i] == '\n' || payload[i] == '\r')) i++;
+        while (i < payload_len && payload[i] != '\n' && payload[i] != '\r' && li < (int)sizeof(line) - 1) {
+            line[li++] = (char)payload[i++];
+        }
+        line[li] = 0;
+        while (i < payload_len && payload[i] != '\n' && payload[i] != '\r') i++;
+        if (line[0]) {
+            print_string(line, -1, video, cursor, COLOR_LIGHT_CYAN);
+            printed++;
+        }
+    }
+
+    if (!printed) {
+        print_string("PKG: no packages listed", -1, video, cursor, COLOR_YELLOW);
+    }
+}
+
+static void handle_pkg_remove_command(const char* args, char* video, int* cursor) {
+    const char* p = args;
+    char package_name[MAX_NAME_LENGTH];
+    char install_path[MAX_PATH_LENGTH];
+    int rm_result;
+
+    if (!read_token(&p, package_name, sizeof(package_name))) {
+        print_string("Usage: pkg remove <name>", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    if (!pkg_db_get_path(package_name, install_path, sizeof(install_path))) {
+        print_string("PKG: package not found in index", -1, video, cursor, COLOR_YELLOW);
+        return;
+    }
+
+    rm_result = fs_rm(install_path, 0);
+    if (rm_result < 0) {
+        print_string("PKG: failed to remove installed file", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    if (!pkg_db_remove_entry(package_name)) {
+        print_string("PKG: removed file, but index cleanup failed", -1, video, cursor, COLOR_YELLOW);
+        return;
+    }
+
+    {
+        char line[128];
+        line[0] = 0;
+        str_concat(line, "PKG: removed ");
+        str_concat(line, package_name);
+        print_string(line, -1, video, cursor, COLOR_LIGHT_GREEN);
+    }
+}
+
 static int udpecho_step_once(char* video, int* cursor) {
     uint8_t src_ip[4];
     uint16_t src_port = 0;
@@ -2470,6 +3266,20 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
         }
     } else if (mini_strcmp(cmd, "udpecho") == 0) {
         print_string("UDPECHO usage: udpecho start|step|run|stop|status", -1, video, cursor, COLOR_YELLOW);
+    } else if (cmd[0] == 'p' && cmd[1] == 'k' && cmd[2] == 'g' && cmd[3] == ' ' && cmd[4] == 'i' && cmd[5] == 'n' && cmd[6] == 's' && cmd[7] == 't' && cmd[8] == 'a' && cmd[9] == 'l' && cmd[10] == 'l' && cmd[11] == ' ') {
+        handle_pkg_install_command(cmd + 12, video, cursor);
+    } else if (mini_strcmp(cmd, "pkg search") == 0) {
+        handle_pkg_search_command(video, cursor);
+    } else if (mini_strcmp(cmd, "pkg repo") == 0) {
+        handle_pkg_repo_command("", video, cursor);
+    } else if (cmd[0] == 'p' && cmd[1] == 'k' && cmd[2] == 'g' && cmd[3] == ' ' && cmd[4] == 'r' && cmd[5] == 'e' && cmd[6] == 'p' && cmd[7] == 'o' && cmd[8] == ' ') {
+        handle_pkg_repo_command(cmd + 9, video, cursor);
+    } else if (mini_strcmp(cmd, "pkg list") == 0) {
+        handle_pkg_list_command(video, cursor);
+    } else if (cmd[0] == 'p' && cmd[1] == 'k' && cmd[2] == 'g' && cmd[3] == ' ' && cmd[4] == 'r' && cmd[5] == 'e' && cmd[6] == 'm' && cmd[7] == 'o' && cmd[8] == 'v' && cmd[9] == 'e' && cmd[10] == ' ') {
+        handle_pkg_remove_command(cmd + 11, video, cursor);
+    } else if (mini_strcmp(cmd, "pkg") == 0) {
+        print_string("PKG usage: pkg repo|search|install|list|remove", -1, video, cursor, COLOR_YELLOW);
     } else if (mini_strcmp(cmd, "about") == 0) {
         handle_command(cmd, video, cursor, "about", "Smiggles OS is a lightweight operating system designed by Jules Miller and Vajra Vanukuri.", COLOR_LIGHT_GRAY);
     } else if (mini_strcmp(cmd, "help") == 0) {
@@ -2521,7 +3331,13 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
             "sock list - list open sockets\n"
             "udpecho start <port> - start UDP echo server\n"
             "udpecho run <count> - pump echo server N steps\n"
-            "udpecho stop - stop UDP echo server\n",
+            "udpecho stop - stop UDP echo server\n"
+            "pkg repo <ip> <port> - set package repo\n"
+            "pkg search - list packages from repo\n"
+            "pkg install <name> [path] - install package from repo\n"
+            "pkg install <ip> <port> <name> [path] - legacy install form\n"
+            "pkg list - list installed packages\n"
+            "pkg remove <name> - uninstall package\n",
             -1, video, cursor, COLOR_LIGHT_MAGENTA);
 
         print_string(
@@ -2628,7 +3444,7 @@ void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* v
     const char* commands[] = {
         "ls", "cd", "pwd", "cat", "mkdir", "rmdir", "rm", "touch", "cp", "mv",
         "echo", "edit", "tree", "grep", "clear", "cls", "help", "time", "ping", "exec",
-        "udp", "tcp", "net", "sock", "udpecho", "about", "ver", "panic", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "filesize", "neofetch", "basic", "syscalltest", "fdtest", "spawn", "ps", "kill", "wait"
+        "udp", "tcp", "net", "sock", "udpecho", "pkg", "about", "ver", "panic", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "filesize", "neofetch", "basic", "syscalltest", "fdtest", "spawn", "ps", "kill", "wait"
     };
     int cmd_count = (int)(sizeof(commands) / sizeof(commands[0]));
     

@@ -445,6 +445,7 @@ int udp_poll_once(void);
 int udp_process_frame(const uint8_t* frame, int length);
 int udp_recv_next(uint8_t src_ip_out[4], uint16_t* src_port_out, uint16_t* dst_port_out, uint8_t* payload_out, int max_payload, int* out_payload_len);
 int udp_recv_next_for_port(uint16_t dst_port_filter, uint8_t src_ip_out[4], uint16_t* src_port_out, uint16_t* dst_port_out, uint8_t* payload_out, int max_payload, int* out_payload_len);
+int udp_discard_for_port(uint16_t dst_port_filter);
 int udp_get_stats(UDPStats* out_stats);
 int udp_set_listen_port(uint16_t port);
 int udp_clear_listen_port(void);

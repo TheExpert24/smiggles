@@ -279,6 +279,29 @@ int udp_recv_next_for_port(uint16_t dst_port_filter, uint8_t src_ip_out[4], uint
     return 0;
 }
 
+int udp_discard_for_port(uint16_t dst_port_filter) {
+    int discarded = 0;
+
+    for (int i = 0; i < UDP_RX_QUEUE_SIZE; i++) {
+        UdpRxEntry* e = &udp_rx_queue[i];
+        if (!e->valid) continue;
+        if (e->dst_port != dst_port_filter) continue;
+        e->valid = 0;
+        discarded++;
+    }
+
+    if (discarded > 0) {
+        udp_rx_count = 0;
+        udp_rx_head = 0;
+        udp_rx_tail = 0;
+        for (int i = 0; i < UDP_RX_QUEUE_SIZE; i++) {
+            udp_rx_queue[i].valid = 0;
+        }
+    }
+
+    return discarded;
+}
+
 int udp_get_stats(UDPStats* out_stats) {
     if (!out_stats) return 0;
     *out_stats = udp_stats;
