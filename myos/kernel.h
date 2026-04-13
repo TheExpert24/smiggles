@@ -408,6 +408,7 @@ void fs_fd_close_for_pid(int pid);
 // Persistent storage
 void fs_save(void);
 void fs_load(void);
+int fs_ensure_default_directories(void);
 void fs_get_status(uint32_t* active_generation_out, int slot_validity[2]);
 
 // String utilities

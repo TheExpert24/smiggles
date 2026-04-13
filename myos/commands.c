@@ -51,6 +51,7 @@ static uint16_t udpecho_port = 0;
 static int logger_ready = 0;
 static const char* shell_stdin_data = 0;
 static int shell_stdin_len = 0;
+static int shell_save_dir_idx = -1;
 
 static void ensure_logger_ready(void) {
     if (!logger_ready) {
@@ -2584,32 +2585,120 @@ static void handle_pwd_command(char* video, int* cursor) {
     print_string(path, -1, video, cursor, COLOR_CYAN);
 }
 
-static void handle_touch_command(const char* filename, char* video, int* cursor) {
-    while (*filename == ' ') filename++;
-    if (*filename == 0) {
-        print_string("Usage: touch <filename>", 23, video, cursor, COLOR_LIGHT_RED);
+static int shell_prepare_create_path(const char* raw_name, char* out_path, int out_max) {
+    char trimmed[MAX_PATH_LENGTH];
+    int len = 0;
+    int start = 0;
+    int end;
+
+    if (!raw_name || !out_path || out_max <= 1) return 0;
+
+    while (raw_name[start] == ' ') start++;
+    end = str_len(raw_name);
+    while (end > start && raw_name[end - 1] == ' ') end--;
+    if (end <= start) return 0;
+
+    while (start < end && len < (int)sizeof(trimmed) - 1) {
+        trimmed[len++] = raw_name[start++];
+    }
+    trimmed[len] = 0;
+    if (trimmed[0] == 0) return 0;
+
+    for (int i = 0; trimmed[i]; i++) {
+        if (trimmed[i] == '/') {
+            str_copy(out_path, trimmed, out_max);
+            return 1;
+        }
+    }
+
+    if (shell_save_dir_idx >= 0 && shell_save_dir_idx < MAX_NODES &&
+        node_table[shell_save_dir_idx].used && node_table[shell_save_dir_idx].type == NODE_DIRECTORY) {
+        char dir_path[MAX_PATH_LENGTH];
+        get_full_path(shell_save_dir_idx, dir_path, MAX_PATH_LENGTH);
+
+        out_path[0] = 0;
+        str_copy(out_path, dir_path, out_max);
+        if (!str_equal(out_path, "/")) {
+            str_concat(out_path, "/");
+        }
+        str_concat(out_path, trimmed);
+        return 1;
+    }
+
+    shell_save_dir_idx = -1;
+    str_copy(out_path, trimmed, out_max);
+    return 1;
+}
+
+static void handle_savedir_command(const char* args, char* video, int* cursor) {
+    char path[MAX_PATH_LENGTH];
+    char show_path[MAX_PATH_LENGTH];
+    int arg_start = 0;
+    int arg_end;
+
+    if (!args) args = "";
+    while (args[arg_start] == ' ') arg_start++;
+
+    if (args[arg_start] == 0) {
+        if (shell_save_dir_idx >= 0 && shell_save_dir_idx < MAX_NODES &&
+            node_table[shell_save_dir_idx].used && node_table[shell_save_dir_idx].type == NODE_DIRECTORY) {
+            get_full_path(shell_save_dir_idx, show_path, MAX_PATH_LENGTH);
+            print_string("Save directory: ", -1, video, cursor, COLOR_LIGHT_CYAN);
+            print_string_sameline(show_path, -1, video, cursor, COLOR_LIGHT_CYAN);
+            return;
+        }
+        shell_save_dir_idx = -1;
+        print_string("Save directory: current directory", -1, video, cursor, COLOR_LIGHT_GRAY);
         return;
     }
-    char clean_name[MAX_PATH_LENGTH];
-    int n = 0;
-    while (filename[n] && n < MAX_PATH_LENGTH - 1) {
-        clean_name[n] = filename[n];
-        n++;
+
+    if (args[arg_start] == 'c' && args[arg_start + 1] == 'l' && args[arg_start + 2] == 'e' &&
+        args[arg_start + 3] == 'a' && args[arg_start + 4] == 'r' && args[arg_start + 5] == 0) {
+        shell_save_dir_idx = -1;
+        print_string("Save directory cleared", -1, video, cursor, COLOR_LIGHT_GREEN);
+        return;
     }
-    while (n > 0 && clean_name[n - 1] == ' ') n--;
-    clean_name[n] = 0;
-    if (clean_name[0] == 0) {
+
+    arg_end = str_len(args);
+    while (arg_end > arg_start && args[arg_end - 1] == ' ') arg_end--;
+
+    int pi = 0;
+    for (int i = arg_start; i < arg_end && pi < MAX_PATH_LENGTH - 1; i++) {
+        path[pi++] = args[i];
+    }
+    path[pi] = 0;
+
+    if (path[0] == 0) {
+        print_string("Usage: savedir [<path>|clear]", -1, video, cursor, COLOR_YELLOW);
+        return;
+    }
+
+    int idx = resolve_path(path);
+    if (idx < 0 || !node_table[idx].used || node_table[idx].type != NODE_DIRECTORY) {
+        print_string("Directory not found", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    shell_save_dir_idx = idx;
+    get_full_path(shell_save_dir_idx, show_path, MAX_PATH_LENGTH);
+    print_string("Save directory set to: ", -1, video, cursor, COLOR_LIGHT_GREEN);
+    print_string_sameline(show_path, -1, video, cursor, COLOR_LIGHT_GREEN);
+}
+
+static void handle_touch_command(const char* filename, char* video, int* cursor) {
+    char target_path[MAX_PATH_LENGTH];
+    if (!shell_prepare_create_path(filename, target_path, MAX_PATH_LENGTH)) {
         print_string("Usage: touch <filename>", 23, video, cursor, COLOR_LIGHT_RED);
         return;
     }
 
-    int existing_idx = resolve_path(clean_name);
+    int existing_idx = resolve_path(target_path);
     if (existing_idx != -1 && node_table[existing_idx].type == NODE_FILE) {
         print_file_already_exists_message(existing_idx, video, cursor);
         return;
     }
 
-    int result = fs_touch(clean_name, "");
+    int result = fs_touch(target_path, "");
     if (result < 0) {
         print_string("Cannot create file", 18, video, cursor, COLOR_LIGHT_RED);
     } else {
@@ -3622,6 +3711,10 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
     
     if (mini_strcmp(cmd, "pwd") == 0) {
         handle_pwd_command(video, cursor);
+    } else if (mini_strcmp(cmd, "savedir") == 0) {
+        handle_savedir_command("", video, cursor);
+    } else if (cmd[0] == 's' && cmd[1] == 'a' && cmd[2] == 'v' && cmd[3] == 'e' && cmd[4] == 'd' && cmd[5] == 'i' && cmd[6] == 'r' && cmd[7] == ' ') {
+        handle_savedir_command(cmd + 8, video, cursor);
     } else if (cmd[0] == 'c' && cmd[1] == 'd' && cmd[2] == ' ') {
         handle_cd_command(cmd + 3, video, cursor, 0x0B);
     } else if (cmd[0] == 'c' && cmd[1] == 'd' && cmd[2] == 0) {
@@ -3679,15 +3772,22 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
         char text[MAX_FILE_CONTENT];
         for (int i = 0; i < text_len && i < MAX_FILE_CONTENT-1; i++) text[i] = cmd[quote_start + 1 + i];
         text[text_len] = 0;
-        char filename[MAX_FILE_NAME];
+        char filename[MAX_PATH_LENGTH];
         int fn = 0;
         int fi = gt + 1;
         while (cmd[fi]) {
-            if (cmd[fi] != ' ' && fn < MAX_FILE_NAME-1) filename[fn++] = cmd[fi];
+            if (cmd[fi] != ' ' && fn < MAX_PATH_LENGTH - 1) filename[fn++] = cmd[fi];
             fi++;
         }
         filename[fn] = 0;
-        handle_echo_command(text, filename, video, cursor, 0x0A);
+        {
+            char target_path[MAX_PATH_LENGTH];
+            if (!shell_prepare_create_path(filename, target_path, MAX_PATH_LENGTH)) {
+                print_string("Bad echo syntax", 16, video, cursor, 0x0C);
+                return;
+            }
+            handle_echo_command(text, target_path, video, cursor, 0x0A);
+        }
     } else if (mini_strcmp(cmd, "pciscan") == 0) {
         pci_scan_and_print(video, cursor);
     } else if (mini_strcmp(cmd, "rtltest") == 0) {
@@ -4623,6 +4723,7 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
             "--- Commands ---\n"
             "ls - list directory\n"
             "cd <dir> - change directory\n"
+            "savedir [<dir>|clear] - default create dir\n"
             "edit <file> - open text editor\n"
             "cat <file> - read file\n"
             "touch <file> - create file\n"
@@ -4785,7 +4886,7 @@ void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* v
     const char* commands[] = {
         "ls", "cd", "pwd", "cat", "mkdir", "rmdir", "rm", "touch", "cp", "mv",
         "echo", "edit", "tree", "grep", "clear", "cls", "help", "time", "ping", "exec",
-        "udp", "tcp", "net", "sock", "udpecho", "pkg", "about", "ver", "panic", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "log", "dmesg", "filesize", "neofetch", "basic", "syscalltest", "fdtest", "spawn", "ps", "kill", "wait"
+        "udp", "tcp", "net", "sock", "udpecho", "pkg", "about", "ver", "panic", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "log", "dmesg", "filesize", "neofetch", "basic", "syscalltest", "fdtest", "spawn", "ps", "kill", "wait", "savedir"
     };
     int cmd_count = (int)(sizeof(commands) / sizeof(commands[0]));
     

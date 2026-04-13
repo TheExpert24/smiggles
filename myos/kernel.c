@@ -540,6 +540,9 @@ void kernel_main(unsigned int mb_magic, unsigned int mb_info_addr) {
         init_filesystem();
         fs_save();
     }
+    if (fs_ensure_default_directories()) {
+        fs_save();
+    }
     time_settings_load();
     // fsimage_to_globals resets current_user_idx, so set it again after fs_load/init
     current_user_idx = 0;

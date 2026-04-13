@@ -363,6 +363,45 @@ void str_concat(char* dest, const char* src) {
     *dest = 0;
 }
 
+static int fs_ensure_root_child_directory(const char* name) {
+    if (!name || !name[0]) return 0;
+
+    for (int i = 0; i < node_table[0].child_count; i++) {
+        int child_idx = node_table[0].children_idx[i];
+        if (!node_table[child_idx].used) continue;
+        if (node_table[child_idx].type != NODE_DIRECTORY) continue;
+        if (str_equal(node_table[child_idx].name, name)) return 0;
+    }
+
+    int new_idx = -1;
+    for (int i = 0; i < MAX_NODES; i++) {
+        if (!node_table[i].used) {
+            new_idx = i;
+            break;
+        }
+    }
+
+    if (new_idx == -1 || node_table[0].child_count >= MAX_CHILDREN) return 0;
+
+    node_table[new_idx].used = 1;
+    node_table[new_idx].type = NODE_DIRECTORY;
+    node_table[new_idx].parent_idx = 0;
+    node_table[new_idx].child_count = 0;
+    str_copy(node_table[new_idx].name, name, MAX_NAME_LENGTH);
+    node_table[0].children_idx[node_table[0].child_count++] = new_idx;
+    if (new_idx >= node_count) node_count = new_idx + 1;
+    return 1;
+}
+
+int fs_ensure_default_directories(void) {
+    int changed = 0;
+    changed |= fs_ensure_root_child_directory("Desktop");
+    changed |= fs_ensure_root_child_directory("Documents");
+    changed |= fs_ensure_root_child_directory("Downloads");
+    changed |= fs_ensure_root_child_directory("Applications");
+    return changed;
+}
+
 void init_filesystem() {
     fs_fd_init();
 
@@ -392,6 +431,8 @@ void init_filesystem() {
     user_table[1].is_admin = 0;
     user_table[1].groups = GROUP_USERS;
     user_count = 2;
+
+    fs_ensure_default_directories();
 }
 
 void get_full_path(int node_idx, char* path, int max_len) {
