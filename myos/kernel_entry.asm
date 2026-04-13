@@ -30,6 +30,7 @@ section .text
 [EXTERN keyboard_handler]
 [EXTERN mouse_handler]
 [EXTERN exception_handler]
+[EXTERN handle_page_fault]
 [EXTERN syscall_dispatch]
 
 %macro EXC_NOERR 1
@@ -85,7 +86,9 @@ _start:
 ; Timer IRQ0 handler stub
 irq0_timer_handler:
     pusha
+    push esp
     call timer_handler
+    add esp, 4
     popa
     iretd
 
@@ -115,18 +118,20 @@ irq12_mouse_handler:
 ;   (ring-3 callers also push esp3/ss3 above eflags)
 isr_syscall_handler:
     pusha
+    mov edi, esp             ; 6th arg: pointer to IRQContext-like frame
     mov eax, [esp + 28]      ; syscall number  (eax)
     mov ebx, [esp + 16]      ; arg0            (ebx)
     mov ecx, [esp + 24]      ; arg1            (ecx)
     mov edx, [esp + 20]      ; arg2            (edx)
     mov esi, [esp + 36]      ; saved cs  — used to detect ring-3 callers
+    push edi
     push esi                 ; 5th arg: saved_cs
     push edx
     push ecx
     push ebx
     push eax
     call syscall_dispatch
-    add esp, 20
+    add esp, 24
     mov [esp + 28], eax      ; write return value back into saved eax
     popa
     iretd
@@ -188,6 +193,27 @@ jump_to_ring3:
     push eax                 ; EIP = entry point
     iretd
 
+; Restore user-visible register/iret state from IRQContext and return to ring 3.
+; void resume_from_irq_context(IRQContext* ctx)
+[GLOBAL resume_from_irq_context]
+resume_from_irq_context:
+    mov esi, [esp+4]         ; ctx pointer
+
+    push dword [esi+52]      ; ss
+    push dword [esi+48]      ; esp
+    push dword [esi+40]      ; eflags
+    push dword [esi+36]      ; cs
+    push dword [esi+32]      ; eip
+
+    mov ebp, [esi+8]
+    mov ebx, [esi+16]
+    mov edx, [esi+20]
+    mov ecx, [esi+24]
+    mov edi, [esi+0]
+    mov eax, [esi+28]
+    mov esi, [esi+4]
+    iretd
+
 EXC_NOERR 0
 EXC_NOERR 1
 EXC_NOERR 2
@@ -202,7 +228,6 @@ EXC_ERR   10
 EXC_ERR   11
 EXC_ERR   12
 EXC_ERR   13
-EXC_ERR   14
 EXC_NOERR 15
 EXC_NOERR 16
 EXC_ERR   17
@@ -220,6 +245,38 @@ EXC_NOERR 28
 EXC_ERR   29
 EXC_ERR   30
 EXC_NOERR 31
+
+[GLOBAL isr14]
+isr14:
+    cli
+    pusha
+    mov eax, cr2
+    push eax
+    push esp
+    call handle_page_fault
+    add esp, 8
+    test eax, eax
+    jnz .pf_handled
+
+    mov eax, [esp+36]
+    mov ebx, [esp+40]
+    mov ecx, [esp+44]
+    mov edx, [esp+32]
+    push ecx
+    push ebx
+    push eax
+    push edx
+    push dword 14
+    call exception_handler
+.pf_hang:
+    cli
+    hlt
+    jmp .pf_hang
+
+.pf_handled:
+    popa
+    add esp, 4
+    iretd
 
 exception_stub_table:
     dd isr0, isr1, isr2, isr3, isr4, isr5, isr6, isr7

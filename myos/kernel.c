@@ -44,20 +44,13 @@ static void panic_hide_mouse(char* video, int* visible, int* saved_offset, char*
 }
 
 static void panic_draw_mouse(char* video, int col, int row, int* visible, int* saved_offset, char* saved_char, unsigned char* saved_attr) {
-    int offset;
-
-    if (col < 0) col = 0;
-    if (col > 79) col = 79;
-    if (row < 0) row = 0;
-    if (row > 24) row = 24;
-
-    offset = (row * 80 + col) * 2;
-    *saved_char = video[offset];
-    *saved_attr = (unsigned char)video[offset + 1];
-    *saved_offset = offset;
-    video[offset] = 'X';
-    video[offset + 1] = COLOR_LIGHT_CYAN;
-    *visible = 1;
+    (void)video;
+    (void)col;
+    (void)row;
+    (void)saved_char;
+    (void)saved_attr;
+    *visible = 0;
+    *saved_offset = -1;
 }
 
 static void panic_reboot(void) {

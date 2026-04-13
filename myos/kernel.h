@@ -74,7 +74,16 @@ extern int current_user_idx; // -1 means no user logged in
 #define MAX_CMD_BUFFER 2048
 
 // --- Process Management ---
-#define MAX_PROCESSES 8
+#define MAX_PROCESSES 64
+#define MAX_PROCESS_MMAP_REGIONS 16
+
+typedef struct {
+    unsigned int addr;
+    unsigned int size;
+    unsigned int order;
+    int in_use;
+} ProcessMMapRegion;
+
 typedef enum {
     PROC_UNUSED = 0,
     PROC_READY,
@@ -97,7 +106,47 @@ typedef struct {
     unsigned int user_stack_size;
     unsigned int run_ticks;
     unsigned int regs[8];
+    unsigned int pending_signals;
+    unsigned int last_irq_eip;
+    unsigned int last_irq_cs;
+    unsigned int last_irq_eflags;
+    unsigned int last_irq_esp;
+    unsigned int last_irq_ss;
+    int parent_pid;
+    unsigned int brk_base;
+    unsigned int brk_current;
+    unsigned int brk_limit;
+    ProcessMMapRegion mmap_regions[MAX_PROCESS_MMAP_REGIONS];
+    int fork_context_valid;
+    unsigned int fork_edi;
+    unsigned int fork_esi;
+    unsigned int fork_ebp;
+    unsigned int fork_ebx;
+    unsigned int fork_edx;
+    unsigned int fork_ecx;
+    unsigned int fork_eax;
+    unsigned int fork_eip;
+    unsigned int fork_cs;
+    unsigned int fork_eflags;
+    unsigned int fork_user_esp;
+    unsigned int fork_user_ss;
 } PCB;
+
+typedef struct {
+    unsigned int edi;
+    unsigned int esi;
+    unsigned int ebp;
+    unsigned int esp_dummy;
+    unsigned int ebx;
+    unsigned int edx;
+    unsigned int ecx;
+    unsigned int eax;
+    unsigned int eip;
+    unsigned int cs;
+    unsigned int eflags;
+    unsigned int user_esp;
+    unsigned int user_ss;
+} IRQContext;
 
 extern PCB process_table[MAX_PROCESSES];
 extern int current_process;
@@ -129,6 +178,7 @@ int process_spawn_ring3_demo(void);
 
 // Spawn a ring-3 process that intentionally faults on kernel-memory access.
 int process_spawn_ring3_fault_demo(void);
+void process_fork_resume_entry(void);
 
 // Kill process by pid
 int process_kill(int pid);
@@ -142,6 +192,9 @@ void process_maintenance_tick(void);
 
 // Human-readable process state
 const char* process_state_name(ProcessState state);
+int process_send_signal(int pid, int signal_number);
+void process_deliver_pending_signals(IRQContext* ctx);
+void process_record_irq_context(const IRQContext* ctx);
 
 // --- Interrupt Definitions ---
 #define PIC1_COMMAND 0x20
@@ -323,6 +376,11 @@ typedef struct {
 
 // Memory management
 void init_paging(uint32_t mb_magic, uint32_t mb_info_addr);
+#define PAGE_FLAG_PRESENT 0x001u
+#define PAGE_FLAG_RW      0x002u
+#define PAGE_FLAG_USER    0x004u
+#define PAGE_FLAG_COW     0x200u
+
 void* alloc_page(void);
 void* alloc_pages(unsigned int order);
 void free_page(void* addr);
@@ -335,6 +393,19 @@ unsigned int paging_create_process_directory(unsigned int user_code_addr,
                                              unsigned int user_stack_size);
 void paging_destroy_process_directory(unsigned int page_directory);
 void paging_switch_directory(unsigned int page_directory);
+int paging_mark_user_range(unsigned int page_directory, unsigned int start, unsigned int size);
+int paging_get_mapping(unsigned int page_directory,
+                       unsigned int vaddr,
+                       unsigned int* out_phys,
+                       unsigned int* out_flags);
+int paging_map_page(unsigned int page_directory,
+                    unsigned int vaddr,
+                    unsigned int phys,
+                    unsigned int flags);
+int paging_set_page_writable(unsigned int page_directory, unsigned int vaddr, int writable);
+void paging_inc_page_ref(unsigned int phys_addr);
+unsigned int paging_get_page_ref(unsigned int phys_addr);
+void paging_dec_page_ref(unsigned int phys_addr);
 
 // Protection (GDT/TSS/Ring setup)
 void init_protection(void);
@@ -345,7 +416,7 @@ unsigned int protection_get_cpl(void);
 void pic_remap(void);
 void set_idt_entry(int n, unsigned int handler);
 void set_idt_entry_user(int n, unsigned int handler);
-void timer_handler(void);
+void timer_handler(IRQContext* ctx);
 void keyboard_handler(void);
 void mouse_handler(void);
 int keyboard_pop_scancode(unsigned char* out_scancode);
@@ -365,7 +436,8 @@ unsigned int syscall_dispatch(unsigned int number,
                               unsigned int arg0,
                               unsigned int arg1,
                               unsigned int arg2,
-                              unsigned int saved_cs);
+                              unsigned int saved_cs,
+                              IRQContext* ctx);
 unsigned int syscall_invoke(unsigned int number);
 unsigned int syscall_invoke1(unsigned int number, unsigned int arg0);
 unsigned int syscall_invoke2(unsigned int number, unsigned int arg0, unsigned int arg1);
@@ -405,6 +477,9 @@ int fs_fd_read(int fd, char* buffer, int count);
 int fs_fd_write(int fd, const char* buffer, int count);
 void fs_fd_close_for_pid(int pid);
 
+// ELF loader
+int elf_load(const char* path, PCB* proc);
+
 // Persistent storage
 void fs_save(void);
 void fs_load(void);
@@ -441,6 +516,7 @@ int clipboard_copy_word_at(const char* text, int len, int cursor_index);
 // Panic handling
 void kernel_panic(const char* reason, const char* detail);
 void exception_handler(unsigned int vector, unsigned int error_code, unsigned int eip, unsigned int cs, unsigned int eflags);
+int handle_page_fault(unsigned int* frame, unsigned int fault_addr);
 extern void (*exception_stub_table[32])(void);
 
 // Display
@@ -585,6 +661,7 @@ void protection_set_kernel_stack(unsigned int kernel_esp0);
 // Drop CPU into CPL=3 (ring 3) at entry:user_esp via iretd.
 // GDT must have user code (0x18) and user data (0x20) descriptors.
 extern void jump_to_ring3(unsigned int entry, unsigned int user_esp);
+extern void resume_from_irq_context(IRQContext* ctx);
 
 // ── Linux i386 syscall ABI compatibility ─────────────────────────────────────
 // When a ring-3 process calls  int 0x80  with eax = one of these numbers
@@ -609,6 +686,11 @@ extern void jump_to_ring3(unsigned int entry, unsigned int user_esp);
 #define LINUX_SYS_UNAME         122
 #define LINUX_SYS_WRITEV        146
 #define LINUX_SYS_EXIT_GROUP    252
+
+#define LINUX_SIGINT  2
+#define LINUX_SIGPIPE 13
+#define LINUX_SIGTERM 15
+#define LINUX_SIGCHLD 17
 
 // Linux errno values returned as negative integers from syscalls
 #define LINUX_EPERM     (-1)
@@ -637,7 +719,8 @@ typedef struct {
 unsigned int linux_syscall_dispatch(unsigned int number,
                                     unsigned int arg0,
                                     unsigned int arg1,
-                                    unsigned int arg2);
+                                    unsigned int arg2,
+                                    IRQContext* ctx);
 
 #endif // KERNEL_H
 

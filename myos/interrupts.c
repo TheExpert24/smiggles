@@ -232,14 +232,19 @@ void pic_remap() {
 }
 
 // C handlers called from ASM stubs
-// Timer IRQ handler.  Increments the tick counter and does lightweight
-// maintenance only.  Context switching is NOT done here because
-// context_switch_asm cannot safely nest inside the pusha/popa IRQ wrapper.
-// Cooperative scheduling happens via process_yield() called from user code.
-void timer_handler() {
+// Timer IRQ handler with full interrupt-frame context.
+void timer_handler(IRQContext* ctx) {
     ticks++;
+    process_record_irq_context(ctx);
+    process_deliver_pending_signals(ctx);
     process_maintenance_tick();
     asm volatile("outb %0, %1" : : "a"((unsigned char)PIC_EOI), "Nd"((uint16_t)PIC1_COMMAND));
+
+    // Preempt user mode, but avoid switching away while a process is in
+    // kernel mode (e.g. inside a syscall) to keep IRQ-time scheduling stable.
+    if (current_process == -1 || (ctx && ((ctx->cs & 3u) == 3u))) {
+        schedule();
+    }
 }
 
 void keyboard_handler() {
@@ -282,6 +287,54 @@ void exception_handler(unsigned int vector, unsigned int error_code, unsigned in
     append_hex32(detail, eflags);
 
     kernel_panic(exception_name(vector), detail);
+}
+
+int handle_page_fault(unsigned int* frame, unsigned int fault_addr) {
+    if (!frame) return 0;
+    if (current_process < 0 || current_process >= MAX_PROCESSES) return 0;
+
+    unsigned int error_code = frame[8];
+    unsigned int fault_page = fault_addr & 0xFFFFF000u;
+    PCB* proc = &process_table[current_process];
+
+    // Only handle present+write faults in user mode for COW pages.
+    if ((error_code & 0x1u) == 0u) return 0;
+    if ((error_code & 0x2u) == 0u) return 0;
+    if ((error_code & 0x4u) == 0u) return 0;
+
+    unsigned int phys = 0;
+    unsigned int flags = 0;
+    if (paging_get_mapping(proc->page_directory, fault_page, &phys, &flags) != 0) return 0;
+    if ((flags & PAGE_FLAG_COW) == 0u) return 0;
+
+    unsigned int refs = paging_get_page_ref(phys & 0xFFFFF000u);
+    if (refs > 1u) {
+        void* new_page = alloc_page();
+        if (!new_page) return 0;
+        unsigned int new_phys = (unsigned int)(uintptr_t)new_page;
+
+        unsigned char* dst = (unsigned char*)(uintptr_t)new_phys;
+        unsigned char* src = (unsigned char*)(uintptr_t)(phys & 0xFFFFF000u);
+        for (unsigned int i = 0; i < 4096u; i++) dst[i] = src[i];
+
+        paging_dec_page_ref(phys & 0xFFFFF000u);
+        if (paging_map_page(proc->page_directory,
+                            fault_page,
+                            new_phys,
+                            ((flags | PAGE_FLAG_RW | PAGE_FLAG_USER) & ~PAGE_FLAG_COW)) != 0) {
+            free_page(new_page);
+            return 0;
+        }
+        return 1;
+    }
+
+    if (paging_map_page(proc->page_directory,
+                        fault_page,
+                        phys,
+                        ((flags | PAGE_FLAG_RW | PAGE_FLAG_USER) & ~PAGE_FLAG_COW)) != 0) {
+        return 0;
+    }
+    return 1;
 }
 
 int keyboard_pop_scancode(unsigned char* out_scancode) {

@@ -22,6 +22,328 @@ static void sc_memset(void* dst, unsigned char val, int n) {
     for (int i = 0; i < n; i++) d[i] = val;
 }
 
+typedef struct {
+    unsigned int addr;
+    unsigned int len;
+    unsigned int prot;
+    unsigned int flags;
+    unsigned int fd;
+    unsigned int offset;
+} LinuxMmapArgs;
+
+static unsigned int align_up_u32(unsigned int value, unsigned int align) {
+    return (value + align - 1u) & ~(align - 1u);
+}
+
+static unsigned int pages_to_order(unsigned int pages) {
+    unsigned int order = 0;
+    unsigned int size = 1;
+    while (size < pages) {
+        size <<= 1;
+        order++;
+    }
+    return order;
+}
+
+static PCB* current_proc(void) {
+    if (current_process < 0 || current_process >= MAX_PROCESSES) return 0;
+    return &process_table[current_process];
+}
+
+static int find_free_mmap_slot(PCB* proc) {
+    if (!proc) return -1;
+    for (int i = 0; i < MAX_PROCESS_MMAP_REGIONS; i++) {
+        if (!proc->mmap_regions[i].in_use) return i;
+    }
+    return -1;
+}
+
+static int share_cow_page(unsigned int parent_pd, unsigned int child_pd, unsigned int vaddr) {
+    unsigned int phys = 0;
+    unsigned int flags = 0;
+    if (paging_get_mapping(parent_pd, vaddr, &phys, &flags) != 0) return -1;
+
+    unsigned int cow_flags = (flags | PAGE_FLAG_USER | PAGE_FLAG_COW) & ~PAGE_FLAG_RW;
+    if (paging_map_page(child_pd, vaddr, phys, cow_flags) != 0) return -1;
+    if (paging_map_page(parent_pd, vaddr, phys, cow_flags) != 0) return -1;
+
+    paging_inc_page_ref(phys & 0xFFFFF000u);
+    return 0;
+}
+
+static void release_proc_user_allocations(PCB* proc) {
+    if (!proc) return;
+
+    for (int i = 0; i < MAX_PROCESS_MMAP_REGIONS; i++) {
+        if (!proc->mmap_regions[i].in_use) continue;
+        unsigned int pages = proc->mmap_regions[i].size / 4096u;
+        for (unsigned int p = 0; p < pages; p++) {
+            free_page((void*)(proc->mmap_regions[i].addr + p * 4096u));
+        }
+        proc->mmap_regions[i].in_use = 0;
+        proc->mmap_regions[i].addr = 0;
+        proc->mmap_regions[i].size = 0;
+        proc->mmap_regions[i].order = 0;
+    }
+
+    if (proc->brk_base && proc->brk_limit > proc->brk_base) {
+        unsigned int pages = (proc->brk_limit - proc->brk_base) / 4096u;
+        for (unsigned int p = 0; p < pages; p++) {
+            free_page((void*)(proc->brk_base + p * 4096u));
+        }
+    }
+    proc->brk_base = 0;
+    proc->brk_current = 0;
+    proc->brk_limit = 0;
+}
+
+static int clone_user_mappings(PCB* parent, PCB* child) {
+    if (!parent || !child) return -1;
+
+    if (parent->user_stack_base && parent->user_stack_size) {
+        unsigned int parent_phys = 0;
+        unsigned int parent_flags = 0;
+        if (paging_get_mapping(parent->page_directory,
+                               parent->user_stack_base,
+                               &parent_phys,
+                               &parent_flags) != 0) {
+            return -1;
+        }
+
+        unsigned int cow_flags = (parent_flags | 0x4u) & ~0x2u;
+        if (paging_map_page(child->page_directory,
+                            parent->user_stack_base,
+                            parent_phys,
+                            cow_flags) != 0) {
+            return -1;
+        }
+        if (paging_set_page_writable(parent->page_directory,
+                                     parent->user_stack_base,
+                                     0) != 0) {
+            return -1;
+        }
+
+        paging_inc_page_ref(parent_phys & 0xFFFFF000u);
+        child->user_stack_base = parent->user_stack_base;
+        child->user_stack_size = parent->user_stack_size;
+    }
+
+    if (parent->brk_base && parent->brk_limit > parent->brk_base) {
+        unsigned int brk_size = parent->brk_limit - parent->brk_base;
+        unsigned int brk_pages = align_up_u32(brk_size, 4096u) / 4096u;
+        for (unsigned int p = 0; p < brk_pages; p++) {
+            unsigned int vaddr = parent->brk_base + p * 4096u;
+            if (share_cow_page(parent->page_directory, child->page_directory, vaddr) != 0) {
+                return -1;
+            }
+        }
+
+        child->brk_base = parent->brk_base;
+        child->brk_current = parent->brk_current;
+        child->brk_limit = parent->brk_limit;
+    }
+
+    for (int i = 0; i < MAX_PROCESS_MMAP_REGIONS; i++) {
+        if (!parent->mmap_regions[i].in_use) continue;
+        unsigned int pages = parent->mmap_regions[i].size / 4096u;
+        for (unsigned int p = 0; p < pages; p++) {
+            unsigned int vaddr = parent->mmap_regions[i].addr + p * 4096u;
+            if (share_cow_page(parent->page_directory, child->page_directory, vaddr) != 0) {
+                return -1;
+            }
+        }
+        child->mmap_regions[i] = parent->mmap_regions[i];
+    }
+
+    return 0;
+}
+
+static unsigned int linux_do_brk(unsigned int requested) {
+    PCB* proc = current_proc();
+    if (!proc) return LINUX_EINVAL;
+
+    if (proc->brk_base == 0) {
+        unsigned int pages = 256u;
+        unsigned int order = pages_to_order(pages);
+        void* block = alloc_pages(order);
+        if (!block) return LINUX_ENOMEM;
+        proc->brk_base = (unsigned int)(uintptr_t)block;
+        proc->brk_current = proc->brk_base;
+        proc->brk_limit = proc->brk_base + pages * 4096u;
+        if (paging_mark_user_range(proc->page_directory, proc->brk_base, pages * 4096u) != 0) {
+            free_pages(block, order);
+            proc->brk_base = 0;
+            proc->brk_current = 0;
+            proc->brk_limit = 0;
+            return LINUX_ENOMEM;
+        }
+    }
+
+    if (requested == 0) return proc->brk_current;
+    if (requested < proc->brk_base || requested > proc->brk_limit) return proc->brk_current;
+
+    proc->brk_current = requested;
+    return proc->brk_current;
+}
+
+static unsigned int linux_do_mmap(unsigned int arg0, unsigned int arg1, unsigned int arg2) {
+    (void)arg2;
+    PCB* proc = current_proc();
+    if (!proc) return LINUX_EINVAL;
+
+    unsigned int len = arg1;
+    if (len == 0u && arg0 != 0u) {
+        LinuxMmapArgs* args = (LinuxMmapArgs*)(uintptr_t)arg0;
+        len = args->len;
+    }
+    if (len == 0u) return LINUX_EINVAL;
+
+    unsigned int page_len = align_up_u32(len, 4096u);
+    unsigned int pages = page_len / 4096u;
+    unsigned int order = pages_to_order(pages);
+    void* block = alloc_pages(order);
+    if (!block) return LINUX_ENOMEM;
+
+    unsigned int block_bytes = (1u << order) * 4096u;
+    if (paging_mark_user_range(proc->page_directory, (unsigned int)(uintptr_t)block, block_bytes) != 0) {
+        free_pages(block, order);
+        return LINUX_ENOMEM;
+    }
+
+    int slot = find_free_mmap_slot(proc);
+    if (slot < 0) {
+        free_pages(block, order);
+        return LINUX_ENOMEM;
+    }
+
+    proc->mmap_regions[slot].in_use = 1;
+    proc->mmap_regions[slot].addr = (unsigned int)(uintptr_t)block;
+    proc->mmap_regions[slot].size = block_bytes;
+    proc->mmap_regions[slot].order = order;
+    return proc->mmap_regions[slot].addr;
+}
+
+static unsigned int linux_do_munmap(unsigned int addr, unsigned int len) {
+    (void)len;
+    PCB* proc = current_proc();
+    if (!proc) return LINUX_EINVAL;
+
+    for (int i = 0; i < MAX_PROCESS_MMAP_REGIONS; i++) {
+        if (!proc->mmap_regions[i].in_use) continue;
+        if (proc->mmap_regions[i].addr != addr) continue;
+        unsigned int pages = proc->mmap_regions[i].size / 4096u;
+        for (unsigned int p = 0; p < pages; p++) {
+            free_page((void*)(proc->mmap_regions[i].addr + p * 4096u));
+        }
+        proc->mmap_regions[i].in_use = 0;
+        proc->mmap_regions[i].addr = 0;
+        proc->mmap_regions[i].size = 0;
+        proc->mmap_regions[i].order = 0;
+        return 0;
+    }
+    return LINUX_EINVAL;
+}
+
+static unsigned int linux_do_fork(IRQContext* ctx) {
+    PCB* parent = current_proc();
+    if (!parent) return LINUX_EINVAL;
+    if (!ctx || (ctx->cs & 3u) != 3u) return LINUX_ENOSYS;
+
+    int child_pid = process_create((unsigned int)process_fork_resume_entry);
+    if (child_pid < 0) return LINUX_ENOMEM;
+
+    PCB* child = &process_table[child_pid];
+    child->regs[7] = 0;
+    child->parent_pid = parent->pid;
+    child->pending_signals = 0;
+    str_copy(child->name, parent->name, (int)sizeof(child->name));
+
+    unsigned int new_pd = paging_create_process_directory(0, 0, 0);
+    if (!new_pd) {
+        process_kill(child_pid);
+        return LINUX_ENOMEM;
+    }
+
+    paging_destroy_process_directory(child->page_directory);
+    child->page_directory = new_pd;
+
+    if (clone_user_mappings(parent, child) != 0) {
+        process_kill(child_pid);
+        return LINUX_ENOMEM;
+    }
+
+    child->fork_context_valid = 1;
+    child->fork_edi = ctx->edi;
+    child->fork_esi = ctx->esi;
+    child->fork_ebp = ctx->ebp;
+    child->fork_ebx = ctx->ebx;
+    child->fork_edx = ctx->edx;
+    child->fork_ecx = ctx->ecx;
+    child->fork_eax = 0;
+    child->fork_eip = ctx->eip;
+    child->fork_cs = ctx->cs;
+    child->fork_eflags = ctx->eflags;
+    child->fork_user_esp = ctx->user_esp;
+    child->fork_user_ss = ctx->user_ss;
+    child->eip = (unsigned int)process_fork_resume_entry;
+
+    // Parent gets child PID; child is launched with the same entrypoint model.
+    return (unsigned int)child_pid;
+}
+
+static unsigned int linux_do_execve(const char* path) {
+    PCB* proc = current_proc();
+    if (!proc || !path) return LINUX_EFAULT;
+
+    unsigned int new_pd = paging_create_process_directory(0, 0, 0);
+    if (!new_pd) return LINUX_ENOMEM;
+
+    if (proc->user_stack_base) {
+        unsigned int old_stack_phys = 0;
+        unsigned int old_stack_flags = 0;
+        if (paging_get_mapping(proc->page_directory,
+                               proc->user_stack_base,
+                               &old_stack_phys,
+                               &old_stack_flags) == 0) {
+            (void)old_stack_flags;
+            free_page((void*)(old_stack_phys & 0xFFFFF000u));
+        } else {
+            free_page((void*)proc->user_stack_base);
+        }
+        proc->user_stack_base = 0;
+        proc->user_stack_size = 0;
+    }
+    release_proc_user_allocations(proc);
+
+    if (proc->page_directory) {
+        paging_destroy_process_directory(proc->page_directory);
+    }
+    proc->page_directory = new_pd;
+
+    void* user_stack = alloc_page();
+    if (!user_stack) return LINUX_ENOMEM;
+    proc->user_stack_base = (unsigned int)(uintptr_t)user_stack;
+    proc->user_stack_size = 4096u;
+
+    if (paging_mark_user_range(proc->page_directory, proc->user_stack_base, proc->user_stack_size) != 0) {
+        free_page(user_stack);
+        proc->user_stack_base = 0;
+        proc->user_stack_size = 0;
+        return LINUX_ENOMEM;
+    }
+
+    if (elf_load(path, proc) != 0) {
+        free_page(user_stack);
+        proc->user_stack_base = 0;
+        proc->user_stack_size = 0;
+        return LINUX_ENOENT;
+    }
+
+    proc->regs[7] = 1;
+    jump_to_ring3(proc->eip, proc->user_stack_base + proc->user_stack_size - 16u);
+    while (1) { }
+}
+
 // Shared VGA cursor for Linux-process stdout/stderr output.
 // Auto-positioned to the row after the last non-blank line on first use.
 static int linux_stdout_cursor = -1;
@@ -49,15 +371,13 @@ static void linux_term_write(const char* buf, int n) {
     print_string_sameline(buf, n, video, &linux_stdout_cursor, 0x07);
 }
 
-// Simple per-process heap break (one shared region for now).
-// Starts just above 4 MiB and grows upward on brk() calls.
-#define LINUX_HEAP_BASE  0x00400000u
-static unsigned int linux_brk_ptr = LINUX_HEAP_BASE;
-
 unsigned int linux_syscall_dispatch(unsigned int number,
                                     unsigned int arg0,
                                     unsigned int arg1,
-                                    unsigned int arg2) {
+                                    unsigned int arg2,
+                                    IRQContext* ctx) {
+    unsigned int ret;
+    process_record_irq_context(ctx);
     switch (number) {
 
     // ── exit / exit_group ────────────────────────────────────────────────────
@@ -145,15 +465,18 @@ unsigned int linux_syscall_dispatch(unsigned int number,
         return 0;
 
     // ── brk ──────────────────────────────────────────────────────────────────
-    // Return current break if arg0==0; otherwise try to set new break.
-    // We don't actually map memory here yet — that needs the ELF loader and
-    // per-process address spaces.  Return the same pointer so static binaries
-    // that only call brk() to query the break still work.
     case LINUX_SYS_BRK:
-        if (arg0 == 0 || arg0 < linux_brk_ptr)
-            return linux_brk_ptr;
-        linux_brk_ptr = arg0;
-        return linux_brk_ptr;
+        ret = linux_do_brk(arg0);
+        break;
+
+    // ── fork / execve ───────────────────────────────────────────────────────
+    case LINUX_SYS_FORK:
+        ret = linux_do_fork(ctx);
+        break;
+
+    case LINUX_SYS_EXECVE:
+        ret = linux_do_execve((const char*)arg0);
+        break;
 
     // ── uname ────────────────────────────────────────────────────────────────
     case LINUX_SYS_UNAME: {
@@ -168,18 +491,27 @@ unsigned int linux_syscall_dispatch(unsigned int number,
         return 0;
     }
 
-    // ── mmap / munmap ─ stub (no per-process address spaces yet) ────────────
+    // ── mmap / munmap ────────────────────────────────────────────────────────
     case LINUX_SYS_MMAP:
+        ret = linux_do_mmap(arg0, arg1, arg2);
+        break;
+
     case LINUX_SYS_MUNMAP:
-        return (unsigned int)LINUX_ENOMEM;
+        ret = linux_do_munmap(arg0, arg1);
+        break;
 
     // ── ioctl ─ stub ─────────────────────────────────────────────────────────
     case LINUX_SYS_IOCTL:
-        return (unsigned int)LINUX_EINVAL;
+        ret = (unsigned int)LINUX_EINVAL;
+        break;
 
     default:
-        return (unsigned int)LINUX_ENOSYS;
+        ret = (unsigned int)LINUX_ENOSYS;
+        break;
     }
+
+    process_deliver_pending_signals(ctx);
+    return ret;
 }
 
 // ── Our own kernel-internal syscall table ────────────────────────────────────
@@ -191,44 +523,62 @@ unsigned int syscall_dispatch(unsigned int number,
                               unsigned int arg0,
                               unsigned int arg1,
                               unsigned int arg2,
-                              unsigned int saved_cs) {
+                              unsigned int saved_cs,
+                              IRQContext* ctx) {
+    process_record_irq_context(ctx);
     // Ring-3 caller → Linux ABI
     if ((saved_cs & 3) == 3)
-        return linux_syscall_dispatch(number, arg0, arg1, arg2);
+        return linux_syscall_dispatch(number, arg0, arg1, arg2, ctx);
 
+    unsigned int ret;
     switch (number) {
         case SYS_YIELD:
             process_yield();
-            return 0;
+            ret = 0;
+            break;
         case SYS_GET_TICKS:
-            return (unsigned int)ticks;
+            ret = (unsigned int)ticks;
+            break;
         case SYS_GET_PID:
-            if (current_process < 0) return 0xFFFFFFFFu;
-            return (unsigned int)current_process;
+            if (current_process < 0) ret = 0xFFFFFFFFu;
+            else ret = (unsigned int)current_process;
+            break;
         case SYS_WAIT_TICKS: {
             unsigned int start = (unsigned int)ticks;
             while (((unsigned int)ticks - start) < arg0) {
                 process_yield();
             }
-            return (unsigned int)ticks;
+            ret = (unsigned int)ticks;
+            break;
         }
         case SYS_SPAWN_DEMO:
-            return (unsigned int)process_spawn_demo_with_work(arg0);
+            ret = (unsigned int)process_spawn_demo_with_work(arg0);
+            break;
         case SYS_KILL_PID:
-            return (unsigned int)process_kill((int)arg0);
+            ret = (unsigned int)process_kill((int)arg0);
+            break;
         case SYS_GET_CPL:
-            return protection_get_cpl();
+            ret = protection_get_cpl();
+            break;
         case SYS_OPEN:
-            return (unsigned int)fs_fd_open((const char*)arg0, (int)arg1);
+            ret = (unsigned int)fs_fd_open((const char*)arg0, (int)arg1);
+            break;
         case SYS_CLOSE:
-            return (unsigned int)fs_fd_close((int)arg0);
+            ret = (unsigned int)fs_fd_close((int)arg0);
+            break;
         case SYS_READ:
-            return (unsigned int)fs_fd_read((int)arg0, (char*)arg1, (int)arg2);
+            ret = (unsigned int)fs_fd_read((int)arg0, (char*)arg1, (int)arg2);
+            break;
         case SYS_WRITE:
-            return (unsigned int)fs_fd_write((int)arg0, (const char*)arg1, (int)arg2);
+            ret = (unsigned int)fs_fd_write((int)arg0, (const char*)arg1, (int)arg2);
+            break;
         default:
-            return 0xFFFFFFFFu;
+            ret = 0xFFFFFFFFu;
+            break;
     }
+
+    process_deliver_pending_signals(ctx);
+    return ret;
 }
 
 unsigned int syscall_invoke(unsigned int number) {

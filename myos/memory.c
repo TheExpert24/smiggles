@@ -57,6 +57,7 @@ struct mb2_mmap_entry {
 
 // Frame allocation bitmap: 1 = used, 0 = free
 static uint32_t frame_bitmap[MAX_BITMAP_WORDS];
+static uint32_t frame_refcount[MAX_TRACKED_FRAMES];
 static uint32_t total_frames;
 static uint32_t bitmap_words;
 static uint32_t tracked_memory_top;
@@ -117,6 +118,28 @@ static inline int frame_is_set(uint32_t frame) {
     uint32_t bit = frame % 32;
     if (idx >= bitmap_words) return 1;
     return (frame_bitmap[idx] & (1U << bit)) != 0;
+}
+
+static inline uint32_t phys_to_frame(uint32_t phys) {
+    return phys / PAGE_SIZE;
+}
+
+void paging_inc_page_ref(unsigned int phys_addr) {
+    uint32_t frame = phys_to_frame(phys_addr);
+    if (frame >= total_frames) return;
+    frame_refcount[frame]++;
+}
+
+unsigned int paging_get_page_ref(unsigned int phys_addr) {
+    uint32_t frame = phys_to_frame(phys_addr);
+    if (frame >= total_frames) return 0;
+    return frame_refcount[frame];
+}
+
+void paging_dec_page_ref(unsigned int phys_addr) {
+    uint32_t frame = phys_to_frame(phys_addr);
+    if (frame >= total_frames) return;
+    if (frame_refcount[frame] > 0) frame_refcount[frame]--;
 }
 
 static uint32_t align_up_u32(uint32_t value, uint32_t align) {
@@ -415,6 +438,9 @@ static void init_frame_allocator(uint32_t mb_magic, uint32_t mb_info_addr) {
     for (uint32_t i = 0; i < bitmap_words; i++) {
         frame_bitmap[i] = 0xFFFFFFFFu;
     }
+    for (uint32_t i = 0; i < total_frames; i++) {
+        frame_refcount[i] = 0u;
+    }
 
     if (has_mmap && mb_magic == MULTIBOOT2_BOOTLOADER_MAGIC && mb_info_addr != 0) {
         const struct mb2_info* info = (const struct mb2_info*)(uintptr_t)mb_info_addr;
@@ -468,6 +494,10 @@ static void init_frame_allocator(uint32_t mb_magic, uint32_t mb_info_addr) {
             set_frame(f);
         }
     }
+
+    for (uint32_t f = 0; f < total_frames; f++) {
+        frame_refcount[f] = frame_is_set(f) ? 1u : 0u;
+    }
 }
 
 static void destroy_process_directory_internal(uint32_t* pd) {
@@ -496,6 +526,77 @@ static int mark_user_page(uint32_t* pd, uint32_t vaddr) {
     return 0;
 }
 
+int paging_mark_user_range(unsigned int page_directory, unsigned int start, unsigned int size) {
+    if (page_directory == 0u || size == 0u) return -1;
+
+    uint32_t* pd = (uint32_t*)(uintptr_t)page_directory;
+    uint32_t page_start = align_down_u32(start, PAGE_SIZE);
+    uint32_t page_end = align_up_u32(start + size, PAGE_SIZE);
+    if (page_end < page_start) return -1;
+
+    for (uint32_t addr = page_start; addr < page_end; addr += PAGE_SIZE) {
+        if (mark_user_page(pd, addr) != 0) return -1;
+    }
+    return 0;
+}
+
+int paging_get_mapping(unsigned int page_directory,
+                       unsigned int vaddr,
+                       unsigned int* out_phys,
+                       unsigned int* out_flags) {
+    if (!page_directory || !out_phys || !out_flags) return -1;
+
+    uint32_t* pd = (uint32_t*)(uintptr_t)page_directory;
+    uint32_t pde_index = vaddr >> 22;
+    if (pde_index >= mapped_pde_count) return -1;
+
+    uint32_t pde = pd[pde_index];
+    if ((pde & PAGE_FLAG_PRESENT) == 0) return -1;
+
+    uint32_t* pt = (uint32_t*)(uintptr_t)(pde & PAGE_ADDR_MASK);
+    uint32_t pte_index = (vaddr >> 12) & 0x3FFu;
+    uint32_t pte = pt[pte_index];
+    if ((pte & PAGE_FLAG_PRESENT) == 0) return -1;
+
+    *out_phys = (pte & PAGE_ADDR_MASK) | (vaddr & 0xFFFu);
+    *out_flags = pte & 0xFFFu;
+    return 0;
+}
+
+int paging_map_page(unsigned int page_directory,
+                    unsigned int vaddr,
+                    unsigned int phys,
+                    unsigned int flags) {
+    if (!page_directory) return -1;
+
+    uint32_t* pd = (uint32_t*)(uintptr_t)page_directory;
+    uint32_t pde_index = vaddr >> 22;
+    if (pde_index >= mapped_pde_count) return -1;
+
+    uint32_t pde = pd[pde_index];
+    if ((pde & PAGE_FLAG_PRESENT) == 0) return -1;
+
+    uint32_t* pt = (uint32_t*)(uintptr_t)(pde & PAGE_ADDR_MASK);
+    uint32_t pte_index = (vaddr >> 12) & 0x3FFu;
+    pt[pte_index] = (phys & PAGE_ADDR_MASK) | (flags & 0xFFFu) | PAGE_FLAG_PRESENT;
+
+    if ((paging_get_kernel_directory() == page_directory) ||
+        (current_process >= 0 && current_process < MAX_PROCESSES &&
+         process_table[current_process].page_directory == page_directory)) {
+        asm volatile("invlpg (%0)" : : "r"((void*)(uintptr_t)(vaddr & PAGE_ADDR_MASK)) : "memory");
+    }
+    return 0;
+}
+
+int paging_set_page_writable(unsigned int page_directory, unsigned int vaddr, int writable) {
+    unsigned int phys = 0;
+    unsigned int flags = 0;
+    if (paging_get_mapping(page_directory, vaddr, &phys, &flags) != 0) return -1;
+    if (writable) flags |= PAGE_FLAG_RW;
+    else flags &= ~PAGE_FLAG_RW;
+    return paging_map_page(page_directory, vaddr, phys, flags);
+}
+
 // Public API: allocate one 4KiB physical page, returned as a kernel virtual
 // address (identity-mapped).
 void* alloc_page(void) {
@@ -504,6 +605,7 @@ void* alloc_page(void) {
 
     uint32_t frame = buddy_base_frame + rel;
     bitmap_mark_range(frame, 1u, 1);
+    frame_refcount[frame] = 1u;
     uint32_t phys = frame * PAGE_SIZE;
     return (void*)phys;
 }
@@ -516,6 +618,7 @@ void* alloc_pages(unsigned int order) {
     uint32_t frame = buddy_base_frame + rel;
     uint32_t count = 1u << ord;
     bitmap_mark_range(frame, count, 1);
+    for (uint32_t i = 0; i < count; i++) frame_refcount[frame + i] = 1u;
     return (void*)(uintptr_t)(frame * PAGE_SIZE);
 }
 
@@ -538,7 +641,13 @@ void free_pages(void* addr, unsigned int order) {
     uint32_t count = 1u << order;
     if (rel + count > buddy_total_frames) return;
 
+    if (order == 0u && frame_refcount[frame] > 1u) {
+        frame_refcount[frame]--;
+        return;
+    }
+
     bitmap_mark_range(frame, count, 0);
+    for (uint32_t i = 0; i < count; i++) frame_refcount[frame + i] = 0u;
     buddy_free_block(rel, order);
 }
 
