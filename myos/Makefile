@@ -91,7 +91,7 @@ smiggles.iso: kernel.elf iso/boot/grub/grub.cfg
 
 # HDD image--explicit device/bus options kept for workflows that need them.
 # Override HDD_QEMU_OPTS on the command line if you need a custom drive config.
-HDD_QEMU_OPTS ?= file=hdd.img,format=raw,if=ide,bus=0,unit=1
+HDD_QEMU_OPTS ?= file=hdd.img,format=raw,if=ide,bus=0,unit=0
 
 hdd.img:
 	@if [ ! -f $@ ]; then qemu-img create -f raw $@ 10M; fi
@@ -99,7 +99,7 @@ hdd.img:
 # Run
 run: smiggles.iso hdd.img
 	$(call check_tool,$(QEMU),qemu-system-i386,QEMU)
-	$(QEMU) \
+	"$(QEMU)" \
 		-drive file=smiggles.iso,media=cdrom,if=ide,bus=1,unit=0 \
 		-drive $(HDD_QEMU_OPTS) \
 		-boot d \
