@@ -1,4 +1,9 @@
-#define IS_EFFECTIVE_ADMIN(idx) (user_table[idx].is_admin || (user_table[idx].groups & group_table[0].bitmask))
+#ifndef KERNEL_H
+#define KERNEL_H
+
+#include <stdint.h>
+#include "filesystem_new.h"
+
 #define COLOR_BLACK         0x00
 #define COLOR_BLUE          0x01
 #define COLOR_GREEN         0x02
@@ -15,15 +20,10 @@
 #define COLOR_LIGHT_MAGENTA 0x0D
 #define COLOR_YELLOW        0x0E
 #define COLOR_WHITE         0x0F
-#define FS_DISK_SECTOR 10 // Start sector for filesystem data
-// Persistent filesystem image size (must be >= sizeof(struct FSImage) in filesystem.c)
-#define FS_SECTOR_COUNT 320 // 320*512 = 163840 bytes
 
-// Static assert to ensure persistent image is large enough for FSImage
-#ifndef KERNEL_H
-#define KERNEL_H
-
-#include <stdint.h>
+// Legacy filesystem disk region used by filesystem.c
+#define FS_DISK_SECTOR 10
+#define FS_SECTOR_COUNT 320
 
 // --- Common Definitions ---
 #define MAX_PATH_LENGTH 128
@@ -45,6 +45,8 @@ extern Group group_table[MAX_GROUPS];
 extern int group_count;
 #define HASH_SIZE 32 // 256-bit hash
 
+#define IS_EFFECTIVE_ADMIN(idx) (user_table[idx].is_admin || (user_table[idx].groups & group_table[0].bitmask))
+
 typedef struct {
     char username[MAX_NAME_LENGTH];
     unsigned char password_hash[HASH_SIZE];
@@ -65,11 +67,13 @@ void hash_password(const char* password, unsigned char* out_hash);
 extern User user_table[MAX_USERS];
 extern int user_count;
 extern int current_user_idx; // -1 means no user logged in
-#define MAX_FILE_CONTENT 2048
+
+// --- Filesystem Configuration (legacy compatibility) ---
+#define MAX_FILE_CONTENT 2048   // DEPRECATED: Use block-based storage instead
 #define MAX_FILE_NAME 32
-#define MAX_FILES 8
-#define MAX_FILE_SIZE 128
-#define MAX_DIRS 4
+#define MAX_FILES 8             // DEPRECATED: Use real FS with 4096 inodes
+#define MAX_FILE_SIZE 128       // DEPRECATED: Use block-based storage
+#define MAX_DIRS 4              // DEPRECATED: Use real FS
 #define MAX_DIR_NAME 32
 #define MAX_CMD_BUFFER 2048
 
@@ -216,24 +220,27 @@ struct IDT_ptr {
     unsigned int base;
 } __attribute__((packed));
 
-// --- Filesystem Types ---
+// --- Filesystem Types (DEPRECATED - use FInode from filesystem_new.h) ---
 typedef enum {
     NODE_FILE,
     NODE_DIRECTORY
 } NodeType;
 
+// Legacy FSNode structure for backward compatibility
+// NOTE: This is deprecated. New code should use FInode from filesystem_new.h
+// which uses block pointers instead of inline content storage.
 typedef struct FSNode {
     char name[MAX_NAME_LENGTH];
     NodeType type;
     int parent_idx;
     int children_idx[MAX_CHILDREN];
     int child_count;
-    char content[MAX_FILE_CONTENT];
+    char content[MAX_FILE_CONTENT];      // DEPRECATED: max 2KB per file
     int content_size;
     int used;
-    int owner_idx; // index of owning user
-    int group;     // group owner (bitmask or group id)
-    unsigned short permissions; // permission bits: rwx for owner/group/others
+    int owner_idx;                       // index of owning user
+    int group;                           // group owner
+    unsigned short permissions;          // rwx bits
     } __attribute__((packed)) FSNode;
 
 typedef struct {
@@ -249,7 +256,7 @@ typedef struct {
     int dir;
 } RamFile;
 
-// --- Global Variables ---
+// --- Global Variables (Legacy) ---
 extern volatile int ticks;
 extern char last_key;
 extern int just_saved;

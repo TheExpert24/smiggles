@@ -46,9 +46,11 @@ else
 endif
 
 # Sources
+# NOTE: Phase 6 includes new block-based filesystem components alongside legacy compatibility
 C_SOURCES = \
-	kernel.c interrupts.c memory.c filesystem.c display.c \
-	calculator.c basic.c editor.c commands.c clipboard.c \
+	kernel.c interrupts.c memory.c \
+	filesystem.c filesystem_disk.c filesystem_inode.c filesystem_vfs.c \
+	display.c calculator.c basic.c editor.c commands.c clipboard.c \
 	diskio.c ata.c process.c syscall.c protection.c \
 	elf_load.c \
 	pci.c rtl8139.c arp.c ipv4.c icmp.c udp.c net.c \
