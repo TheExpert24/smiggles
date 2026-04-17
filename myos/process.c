@@ -74,6 +74,7 @@ static void process_reap_exited(void) {
 
 static void process_release_resources(PCB* proc) {
     if (!proc) return;
+    vfs_close_for_pid(proc->pid);
     fs_fd_close_for_pid(proc->pid);
     process_release_user_mappings(proc);
     if (proc->page_directory) {

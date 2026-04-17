@@ -17,23 +17,23 @@ static int load_store(char* out, int max_len) {
     if (!out || max_len <= 0) return -1;
     out[0] = 0;
 
-    fd = fs_fd_open(LOG_STORE_PATH, FS_O_READ);
+    fd = vfs_open(LOG_STORE_PATH, FS_O_READ);
     if (fd < 0) return 0;
-    len = fs_fd_read(fd, out, max_len - 1);
-    fs_fd_close(fd);
+    len = vfs_read(fd, out, max_len - 1);
+    vfs_close(fd);
     if (len < 0) return -1;
     out[len] = 0;
     return len;
 }
 
 static int save_store(const char* data, int len) {
-    int fd = fs_fd_open(LOG_STORE_PATH, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+    int fd = vfs_open(LOG_STORE_PATH, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
     if (fd < 0) return -1;
-    if (len > 0 && fs_fd_write(fd, data, len) != len) {
-        fs_fd_close(fd);
+    if (len > 0 && vfs_write(fd, data, len) != len) {
+        vfs_close(fd);
         return -1;
     }
-    fs_fd_close(fd);
+    vfs_close(fd);
     return 0;
 }
 

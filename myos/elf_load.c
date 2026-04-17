@@ -51,21 +51,21 @@ static void elf_memset(void* dst, unsigned char val, unsigned int n) {
 }
 
 static int read_entire_file(const char* path, unsigned char* out, int max_len, int* out_len) {
-    int fd = fs_fd_open(path, FS_O_READ);
+    int fd = vfs_open(path, FS_O_READ);
     if (fd < 0) return -1;
 
     int total = 0;
     while (total < max_len) {
-        int n = fs_fd_read(fd, (char*)out + total, max_len - total);
+        int n = vfs_read(fd, (char*)out + total, max_len - total);
         if (n < 0) {
-            fs_fd_close(fd);
+            vfs_close(fd);
             return -1;
         }
         if (n == 0) break;
         total += n;
     }
 
-    fs_fd_close(fd);
+    vfs_close(fd);
     if (out_len) *out_len = total;
     return 0;
 }

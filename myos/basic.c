@@ -386,17 +386,17 @@ static int tb_save_program(const char* filename) {
     }
     content[pos] = 0;
 
-    fd = fs_fd_open(filename, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+    fd = vfs_open(filename, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
     if (fd < 0) {
         tb_set_error("Save failed");
         return 0;
     }
-    if (pos > 0 && fs_fd_write(fd, content, pos) != pos) {
-        fs_fd_close(fd);
+    if (pos > 0 && vfs_write(fd, content, pos) != pos) {
+        vfs_close(fd);
         tb_set_error("Save failed");
         return 0;
     }
-    fs_fd_close(fd);
+    vfs_close(fd);
     return 1;
 }
 
@@ -413,14 +413,14 @@ static int tb_load_program(const char* filename) {
         return 0;
     }
 
-    fd = fs_fd_open(filename, FS_O_READ);
+    fd = vfs_open(filename, FS_O_READ);
     if (fd < 0) {
         tb_set_error("File not found");
         return 0;
     }
 
-    file_len = fs_fd_read(fd, file_buf, (int)sizeof(file_buf) - 1);
-    fs_fd_close(fd);
+    file_len = vfs_read(fd, file_buf, (int)sizeof(file_buf) - 1);
+    vfs_close(fd);
     if (file_len < 0) {
         tb_set_error("File not found");
         return 0;

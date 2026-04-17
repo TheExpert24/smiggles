@@ -23,17 +23,13 @@ static void sc_memset(void* dst, unsigned char val, int n) {
 }
 
 // New block-based filesystem path (kept separate from legacy filesystem.c symbols)
-extern int newfs_fd_open(const char* path, int flags);
-extern int newfs_fd_close(int fd);
-extern int newfs_fd_read(int fd, char* buffer, int count);
-extern int newfs_fd_write(int fd, const char* buffer, int count);
 extern void newfs_fd_init(void);
 extern int newfs_stat(const char* path, FInode* stat_out);
 extern int newfs_mkdir(const char* path);
 extern int disk_fs_init(void);
 extern int disk_fs_format(void);
 
-static int newfs_ready = 0;
+static int vfs_ready = 0;
 static int ensure_newfs_layout(void) {
     FInode tmp_inode;
     if (newfs_stat("/tmp", &tmp_inode) >= 0) {
@@ -46,20 +42,22 @@ static int ensure_newfs_layout(void) {
 }
 
 int fs_runtime_ensure_newfs(void) {
-    if (newfs_ready) return 1;
-    if (disk_fs_init() == 0) {
-        if (ensure_newfs_layout()) {
-            newfs_fd_init();
-            newfs_ready = 1;
-            return 1;
-        }
+    if (vfs_ready) return 1;
+
+    if (disk_fs_init() != 0) {
+        // If image is not formatted yet, format once and re-init.
+        if (disk_fs_format() != 0) return 0;
+        if (disk_fs_init() != 0) return 0;
     }
-    // If image is not formatted yet, format once and re-init.
-    if (disk_fs_format() != 0) return 0;
-    if (disk_fs_init() != 0) return 0;
+
     if (!ensure_newfs_layout()) return 0;
+
+    // Initialize underlying fd table used by disk backend and then VFS mounts.
     newfs_fd_init();
-    newfs_ready = 1;
+
+    if (vfs_init() != 0) return 0;
+
+    vfs_ready = 1;
     return 1;
 }
 
@@ -433,7 +431,7 @@ unsigned int linux_syscall_dispatch(unsigned int number,
 
     // ── write ────────────────────────────────────────────────────────────────
     // fd=1 (stdout) and fd=2 (stderr) → VGA terminal
-    // other fds → kernel fs_fd_write
+    // other fds → VFS write
     case LINUX_SYS_WRITE: {
         int   fd  = (int)arg0;
         const char* buf = (const char*)arg1;
@@ -444,13 +442,13 @@ unsigned int linux_syscall_dispatch(unsigned int number,
             return (unsigned int)len;
         }
         if (!ensure_newfs_ready()) return (unsigned int)LINUX_ENOSYS;
-        int r = newfs_fd_write(fd, buf, len);
+        int r = vfs_write(fd, buf, len);
         return (r < 0) ? (unsigned int)LINUX_EBADF : (unsigned int)r;
     }
 
     // ── read ─────────────────────────────────────────────────────────────────
     // fd=0 (stdin) → blocking keyboard read into buf
-    // other fds → fs_fd_read
+    // other fds → VFS read
     case LINUX_SYS_READ: {
         int   fd  = (int)arg0;
         char* buf = (char*)arg1;
@@ -473,7 +471,7 @@ unsigned int linux_syscall_dispatch(unsigned int number,
             return (unsigned int)n;
         }
         if (!ensure_newfs_ready()) return (unsigned int)LINUX_ENOSYS;
-        int r = newfs_fd_read(fd, buf, len);
+        int r = vfs_read(fd, buf, len);
         return (r < 0) ? (unsigned int)LINUX_EBADF : (unsigned int)r;
     }
 
@@ -490,14 +488,14 @@ unsigned int linux_syscall_dispatch(unsigned int number,
         if (flags & 0x200/*O_TRUNC*/) our_flags |= FS_O_TRUNC;
         if (flags & 0x400/*O_APPEND*/) our_flags |= FS_O_APPEND;
         if (!ensure_newfs_ready()) return (unsigned int)LINUX_ENOSYS;
-        int fd = newfs_fd_open(path, our_flags);
+        int fd = vfs_open(path, our_flags);
         return (fd < 0) ? (unsigned int)LINUX_ENOENT : (unsigned int)fd;
     }
 
     // ── close ────────────────────────────────────────────────────────────────
     case LINUX_SYS_CLOSE: {
         if (!ensure_newfs_ready()) return (unsigned int)LINUX_ENOSYS;
-        int r = newfs_fd_close((int)arg0);
+        int r = vfs_close((int)arg0);
         return (r < 0) ? (unsigned int)LINUX_EBADF : 0;
     }
 
@@ -611,19 +609,19 @@ unsigned int syscall_dispatch(unsigned int number,
             break;
         case SYS_OPEN:
             if (!ensure_newfs_ready()) ret = 0xFFFFFFFFu;
-            else ret = (unsigned int)newfs_fd_open((const char*)arg0, (int)arg1);
+            else ret = (unsigned int)vfs_open((const char*)arg0, (int)arg1);
             break;
         case SYS_CLOSE:
             if (!ensure_newfs_ready()) ret = 0xFFFFFFFFu;
-            else ret = (unsigned int)newfs_fd_close((int)arg0);
+            else ret = (unsigned int)vfs_close((int)arg0);
             break;
         case SYS_READ:
             if (!ensure_newfs_ready()) ret = 0xFFFFFFFFu;
-            else ret = (unsigned int)newfs_fd_read((int)arg0, (char*)arg1, (int)arg2);
+            else ret = (unsigned int)vfs_read((int)arg0, (char*)arg1, (int)arg2);
             break;
         case SYS_WRITE:
             if (!ensure_newfs_ready()) ret = 0xFFFFFFFFu;
-            else ret = (unsigned int)newfs_fd_write((int)arg0, (const char*)arg1, (int)arg2);
+            else ret = (unsigned int)vfs_write((int)arg0, (const char*)arg1, (int)arg2);
             break;
         default:
             ret = 0xFFFFFFFFu;

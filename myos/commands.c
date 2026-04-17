@@ -24,14 +24,6 @@ void read_line(char* buf, int max_len, char* video, int* cursor) {
     buf[len] = 0;
 }
 
-extern int newfs_fd_open(const char* path, int flags);
-extern int newfs_fd_close(int fd);
-extern int newfs_fd_read(int fd, char* buffer, int count);
-extern int newfs_fd_write(int fd, const char* buffer, int count);
-extern int newfs_stat(const char* path, FInode* stat_out);
-extern int newfs_mkdir(const char* path);
-extern int newfs_unlink(const char* path);
-extern int newfs_readdir(const char* path, DirectoryEntry* entries, int max_entries);
 extern int fs_runtime_ensure_newfs(void);
 extern int path_resolve(const char* path, FInode* inode_out);
 extern int disk_write_inode(uint32_t inode_num, const FInode* inode);
@@ -676,11 +668,11 @@ static int shell_read_file_content(const char* path, char* out, int max_len) {
     if (!fs_runtime_ensure_newfs()) return -1;
     if (!shell_resolve_newfs_path(path, resolved)) return -1;
 
-    idx = newfs_fd_open(resolved, FS_O_READ);
+    idx = vfs_open(resolved, FS_O_READ);
     if (idx < 0) return -1;
 
-    copy_len = newfs_fd_read(idx, out, max_len - 1);
-    newfs_fd_close(idx);
+    copy_len = vfs_read(idx, out, max_len - 1);
+    vfs_close(idx);
     if (copy_len < 0) return -1;
     out[copy_len] = 0;
     return copy_len;
@@ -696,15 +688,15 @@ static int shell_write_file_content(const char* path, const char* data, int len,
     if (!shell_resolve_newfs_path(path, resolved)) return -1;
     flags |= append ? FS_O_APPEND : FS_O_TRUNC;
 
-    fd = newfs_fd_open(resolved, flags);
+    fd = vfs_open(resolved, flags);
     if (fd < 0) return -1;
 
-    if (len > 0 && newfs_fd_write(fd, data, len) != len) {
-        newfs_fd_close(fd);
+    if (len > 0 && vfs_write(fd, data, len) != len) {
+        vfs_close(fd);
         return -1;
     }
 
-    newfs_fd_close(fd);
+    vfs_close(fd);
     return 0;
 }
 
@@ -864,10 +856,10 @@ static void handle_ls_command(char* video, int* cursor, unsigned char color_unus
     }
     shell_ensure_newfs_cwd();
     DirectoryEntry entries[128];
-    int count = newfs_readdir(newfs_cwd, entries, 128);
+    int count = vfs_readdir(newfs_cwd, entries, 128);
     if (count < 0) {
         str_copy(newfs_cwd, "/", MAX_PATH_LENGTH);
-        count = newfs_readdir(newfs_cwd, entries, 128);
+        count = vfs_readdir(newfs_cwd, entries, 128);
     }
     if (count < 0) {
         print_string("Directory not found", 19, video, cursor, COLOR_LIGHT_RED);
@@ -906,7 +898,7 @@ static void handle_ls_command(char* video, int* cursor, unsigned char color_unus
 static void handle_lsall_command(char* video, int* cursor) {
     shell_ensure_newfs_cwd();
     DirectoryEntry entries[128];
-    int count = newfs_readdir(newfs_cwd, entries, 128);
+    int count = vfs_readdir(newfs_cwd, entries, 128);
     if (count < 0) {
         print_string("Directory not found", -1, video, cursor, COLOR_LIGHT_RED);
         return;
@@ -1015,7 +1007,7 @@ static void handle_rm_command(const char* filename, char* video, int* cursor, un
         return;
     }
 
-    int result = newfs_unlink(path);
+    int result = vfs_unlink(path);
     if (result < 0) {
         print_string("File not found or cannot remove root", 37, video, cursor, COLOR_LIGHT_RED);
     } else {
@@ -1156,7 +1148,7 @@ static void handle_mv_command(const char* oldname, const char* newname, char* vi
         return;
     }
 
-    newfs_unlink(src_path);
+    vfs_unlink(src_path);
     print_string("Renamed", 7, video, cursor, COLOR_LIGHT_GREEN);
 }
 
@@ -1168,7 +1160,7 @@ static void handle_mkdir_command(const char* dirname, char* video, int* cursor, 
         return;
     }
 
-    int result = newfs_mkdir(path);
+    int result = vfs_mkdir(path);
     if (result < 0) {
         print_string("Parent directory not found", 26, video, cursor, COLOR_LIGHT_RED);
     } else {
@@ -1197,7 +1189,7 @@ static void handle_cd_command(const char* dirname, char* video, int* cursor, uns
         return;
     }
 
-    if (newfs_stat(resolved, &inode) < 0) {
+    if (vfs_stat(resolved, &inode) < 0) {
         print_string("Directory not found", 19, video, cursor, COLOR_LIGHT_RED);
         return;
     }
@@ -1232,7 +1224,7 @@ static void handle_rmdir_command(const char* dirname, char* video, int* cursor) 
         return;
     }
 
-    int result = newfs_unlink(resolved);
+    int result = vfs_unlink(resolved);
     if (result < 0) {
         print_string("Directory not found", 19, video, cursor, COLOR_LIGHT_RED);
     } else {
@@ -2324,7 +2316,7 @@ static void handle_pkg_remove_command(const char* args, char* video, int* cursor
         return;
     }
 
-    rm_result = newfs_unlink(install_path);
+    rm_result = vfs_unlink(install_path);
     if (rm_result < 0) {
         print_string("PKG: failed to remove installed file", -1, video, cursor, COLOR_LIGHT_RED);
         return;
@@ -2754,7 +2746,7 @@ static void handle_savedir_command(const char* args, char* video, int* cursor) {
 
     char resolved[MAX_PATH_LENGTH];
     FInode inode;
-    if (!shell_resolve_newfs_path(path, resolved) || newfs_stat(resolved, &inode) < 0 || !(inode.mode & INODE_MODE_DIR)) {
+    if (!shell_resolve_newfs_path(path, resolved) || vfs_stat(resolved, &inode) < 0 || !(inode.mode & INODE_MODE_DIR)) {
         print_string("Directory not found", -1, video, cursor, COLOR_LIGHT_RED);
         return;
     }
@@ -4988,7 +4980,7 @@ void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* v
     // Also match files/directories in current directory
     {
         DirectoryEntry entries[32];
-        int entry_count = newfs_readdir(newfs_cwd, entries, 32);
+        int entry_count = vfs_readdir(newfs_cwd, entries, 32);
         if (entry_count < 0) entry_count = 0;
         for (int i = 0; i < entry_count && tab_match_count < 32; i++) {
             int match = 1;

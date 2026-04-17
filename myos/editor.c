@@ -188,9 +188,9 @@ static void editor_sync_cursor_and_view(const char* buf, int len, char* video, i
 
 // --- Nano-like Text Editor ---
 void nano_editor(const char* filename, char* video, int* cursor) {
-    int fd = fs_fd_open(filename, FS_O_READ);
+    int fd = vfs_open(filename, FS_O_READ);
     if (fd < 0) {
-        fd = fs_fd_open(filename, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+        fd = vfs_open(filename, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
         if (fd < 0) {
             print_string("Cannot create file", 18, video, cursor, 0xC);
             return;
@@ -204,12 +204,12 @@ void nano_editor(const char* filename, char* video, int* cursor) {
     int loaded = 0;
     int read_len;
     char file_buf[MAX_FILE_CONTENT];
-    fs_fd_close(fd);
+    vfs_close(fd);
 
-    fd = fs_fd_open(filename, FS_O_READ);
+    fd = vfs_open(filename, FS_O_READ);
     if (fd >= 0) {
-        read_len = fs_fd_read(fd, file_buf, (int)sizeof(file_buf) - 1);
-        fs_fd_close(fd);
+        read_len = vfs_read(fd, file_buf, (int)sizeof(file_buf) - 1);
+        vfs_close(fd);
         if (read_len < 0) read_len = 0;
         file_buf[read_len] = 0;
         len = read_len;
@@ -380,9 +380,9 @@ void nano_editor(const char* filename, char* video, int* cursor) {
                 break;
             }
             buf[len] = 0;
-            fd = fs_fd_open(filename, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
-            if (fd < 0 || (len > 0 && fs_fd_write(fd, buf, len) != len)) {
-                if (fd >= 0) fs_fd_close(fd);
+            fd = vfs_open(filename, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+            if (fd < 0 || (len > 0 && vfs_write(fd, buf, len) != len)) {
+                if (fd >= 0) vfs_close(fd);
                 print_string("Save failed", -1, video, cursor, COLOR_RED);
                 while (1) {
                     unsigned char sc;
@@ -394,7 +394,7 @@ void nano_editor(const char* filename, char* video, int* cursor) {
                 exit_code = 2;
                 break;
             }
-            fs_fd_close(fd);
+            vfs_close(fd);
             while (1) {
                 unsigned char sc;
                 if (!keyboard_pop_scancode(&sc)) {

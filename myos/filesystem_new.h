@@ -189,6 +189,11 @@ int vfs_open(const char* path, int flags);
 int vfs_close(int fd);
 int vfs_read(int fd, char* buf, int count);
 int vfs_write(int fd, const char* buf, int count);
+int vfs_readdir(const char* path, DirectoryEntry* entries, int max_entries);
+int vfs_mkdir(const char* path);
+int vfs_unlink(const char* path);
+int vfs_stat(const char* path, FInode* stat_out);
+void vfs_close_for_pid(int pid);
 
 // ============================================================================
 // File Descriptor Structure (revised)
