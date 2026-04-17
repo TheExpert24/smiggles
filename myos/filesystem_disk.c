@@ -6,6 +6,9 @@
 #include "filesystem_new.h"
 #include <stdint.h>
 
+extern int inode_write_directory(uint32_t inode_num, const DirectoryEntry* entries, int entry_count);
+extern int inode_create_directory(const char* path, uint16_t mode, uint16_t uid, uint16_t gid);
+
 // Private cache structures
 static CachedInode inode_cache[INODE_CACHE_SIZE] __attribute__((unused));
 static int inode_cache_count __attribute__((unused)) = 0;
@@ -16,6 +19,8 @@ static int block_cache_count __attribute__((unused)) = 0;
 // Superblock cache
 static FSuperblock cached_superblock;
 static int superblock_dirty = 0;
+
+int disk_fs_flush(void);
 
 // Bitmaps (allocated once at init, kept in memory for performance)
 static uint8_t inode_bitmap[512];  // 4096 inodes = 512 bytes
@@ -465,6 +470,7 @@ int disk_fs_init(void) {
 // Format filesystem (DESTRUCTIVE - erases everything)
 int disk_fs_format(void) {
     unsigned char sector_buf[512];
+    unsigned char block_buf[FS_BLOCK_SIZE];
     
     // Initialize superblock
     my_memset(&cached_superblock, 0, sizeof(FSuperblock));
@@ -500,7 +506,7 @@ int disk_fs_format(void) {
     if (save_block_bitmap() != 0) {
         return -1;
     }
-    
+
     // Clear all inode table slots
     my_memset(sector_buf, 0, 512);
     for (int i = FS_INODE_TABLE_START_SECTOR; i < FS_INODE_TABLE_START_SECTOR + 2000; i++) {
@@ -508,8 +514,48 @@ int disk_fs_format(void) {
     }
     
     // Clear all data blocks
+    my_memset(block_buf, 0, FS_BLOCK_SIZE);
     for (int i = 0; i < FS_TOTAL_BLOCKS; i++) {
-        disk_write_block(i, (uint8_t*)sector_buf);
+        disk_write_block(i, block_buf);
+    }
+
+    // Bootstrap a usable root directory after the wipe.
+    FInode root_inode;
+    DirectoryEntry root_entries[2];
+
+    my_memset(&root_inode, 0, sizeof(FInode));
+    root_inode.mode = INODE_MODE_DIR | INODE_PERM_OWNER_R | INODE_PERM_OWNER_W | INODE_PERM_OWNER_X;
+    root_inode.uid = 0;
+    root_inode.gid = 0;
+    root_inode.link_count = 2;
+    root_inode.size = 0;
+    if (disk_write_inode(1, &root_inode) != 0) {
+        return -1;
+    }
+
+    my_memset(&root_entries[0], 0, sizeof(DirectoryEntry));
+    root_entries[0].inode = 1;
+    root_entries[0].file_type = DIRENT_TYPE_DIR;
+    root_entries[0].name_len = 1;
+    root_entries[0].name[0] = '.';
+
+    my_memset(&root_entries[1], 0, sizeof(DirectoryEntry));
+    root_entries[1].inode = 1;
+    root_entries[1].file_type = DIRENT_TYPE_DIR;
+    root_entries[1].name_len = 2;
+    root_entries[1].name[0] = '.';
+    root_entries[1].name[1] = '.';
+
+    if (inode_write_directory(1, root_entries, 2) != 0) {
+        return -1;
+    }
+
+    if (inode_create_directory("/tmp", INODE_PERM_OWNER_R | INODE_PERM_OWNER_W | INODE_PERM_OWNER_X, 0, 0) < 0) {
+        return -1;
+    }
+
+    if (disk_fs_flush() != 0) {
+        return -1;
     }
     
     return 0;

@@ -358,6 +358,7 @@ static int tb_save_program(const char* filename) {
     char line[128];
     char num[16];
     int pos = 0;
+    int fd;
 
     if (!filename || !filename[0]) {
         tb_set_error("Missing filename");
@@ -385,34 +386,51 @@ static int tb_save_program(const char* filename) {
     }
     content[pos] = 0;
 
-    if (fs_touch(filename, content) < 0) {
+    fd = fs_fd_open(filename, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+    if (fd < 0) {
         tb_set_error("Save failed");
         return 0;
     }
+    if (pos > 0 && fs_fd_write(fd, content, pos) != pos) {
+        fs_fd_close(fd);
+        tb_set_error("Save failed");
+        return 0;
+    }
+    fs_fd_close(fd);
     return 1;
 }
 
 static int tb_load_program(const char* filename) {
-    int idx;
+    int fd;
     char linebuf[BASIC_LINE_LEN];
     int line_pos = 0;
     int i;
+    char file_buf[MAX_FILE_CONTENT];
+    int file_len;
 
     if (!filename || !filename[0]) {
         tb_set_error("Missing filename");
         return 0;
     }
 
-    idx = resolve_path(filename);
-    if (idx < 0 || !node_table[idx].used || node_table[idx].type != NODE_FILE) {
+    fd = fs_fd_open(filename, FS_O_READ);
+    if (fd < 0) {
         tb_set_error("File not found");
         return 0;
     }
 
+    file_len = fs_fd_read(fd, file_buf, (int)sizeof(file_buf) - 1);
+    fs_fd_close(fd);
+    if (file_len < 0) {
+        tb_set_error("File not found");
+        return 0;
+    }
+    file_buf[file_len] = 0;
+
     tb_clear_program();
 
-    for (i = 0; i <= node_table[idx].content_size; i++) {
-        char c = (i == node_table[idx].content_size) ? '\n' : node_table[idx].content[i];
+    for (i = 0; i <= file_len; i++) {
+        char c = (i == file_len) ? '\n' : file_buf[i];
         if (c == '\n' || c == '\r') {
             const char* p = linebuf;
             int ln = 0;

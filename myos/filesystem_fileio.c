@@ -6,6 +6,15 @@
 #include "filesystem_new.h"
 #include <stdint.h>
 
+// Export legacy fs_fd_* symbols and provide newfs_* wrappers so the
+// compatibility layer and the new shell/syscall path can share the same code.
+#define fs_stat      newfs_stat
+#define fs_mkdir     newfs_mkdir
+#define fs_rmdir     newfs_rmdir
+#define fs_unlink    newfs_unlink
+#define fs_readdir   newfs_readdir
+#define fs_touch     newfs_touch
+
 // External functions
 extern int disk_read_block(uint32_t block, uint8_t* buf);
 extern int disk_write_block(uint32_t block, const uint8_t* buf);
@@ -186,6 +195,15 @@ int fs_fd_close(int fd) {
     return 0;
 }
 
+void fs_fd_close_for_pid(int pid) {
+    for (int i = 0; i < MAX_OPEN_FDS; i++) {
+        if (!fd_table[i].used) continue;
+        if (fd_table[i].owner_pid == pid) {
+            fs_fd_close(i);
+        }
+    }
+}
+
 // ============================================================================
 // Read File
 // ============================================================================
@@ -201,11 +219,11 @@ int fs_fd_read(int fd, char* buffer, int count) {
     }
     
     uint32_t offset = fd_table[fd].offset;
-    uint32_t available = inode.size - offset;
-    
-    if (available <= 0) {
+    if (offset >= inode.size) {
         return 0;  // End of file
     }
+
+    int available = (int)(inode.size - offset);
     
     int to_read = count;
     if (to_read > available) {
@@ -228,7 +246,7 @@ int fs_fd_read(int fd, char* buffer, int count) {
             return -5;  // Read error
         }
         
-        uint32_t to_copy = 4096 - block_offset;
+        int to_copy = (int)(4096u - block_offset);
         if (to_copy > (to_read - bytes_read)) {
             to_copy = to_read - bytes_read;
         }
@@ -271,10 +289,11 @@ int fs_fd_write(int fd, const char* buffer, int count) {
         
         if (block_num == 0 || block_num == (uint32_t)-1) {
             // Need to allocate new block
-            block_num = disk_allocate_block();
-            if (block_num < 0) {
+            int allocated_block = disk_allocate_block();
+            if (allocated_block < 0) {
                 return -5;  // Allocation failed
             }
+            block_num = (uint32_t)allocated_block;
             
             // Initialize block
             my_memset(block_buf, 0, 4096);
@@ -295,7 +314,7 @@ int fs_fd_write(int fd, const char* buffer, int count) {
             }
         }
         
-        uint32_t to_copy = 4096 - block_offset;
+        int to_copy = (int)(4096u - block_offset);
         if (to_copy > (count - bytes_written)) {
             to_copy = count - bytes_written;
         }
@@ -412,3 +431,14 @@ int fs_readdir(const char* path, DirectoryEntry* entries, int max_entries) {
     
     return inode_read_directory(inode_num, entries, max_entries);
 }
+
+// ============================================================================
+// New-FS Wrappers
+// ============================================================================
+
+void newfs_fd_init(void) { fs_fd_init(); }
+int newfs_fd_open(const char* path, int flags) { return fs_fd_open(path, flags); }
+int newfs_fd_close(int fd) { return fs_fd_close(fd); }
+int newfs_fd_read(int fd, char* buffer, int count) { return fs_fd_read(fd, buffer, count); }
+int newfs_fd_write(int fd, const char* buffer, int count) { return fs_fd_write(fd, buffer, count); }
+int newfs_fd_seek(int fd, uint32_t offset, int whence) { return fs_fd_seek(fd, offset, whence); }

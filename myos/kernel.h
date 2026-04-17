@@ -21,8 +21,9 @@
 #define COLOR_YELLOW        0x0E
 #define COLOR_WHITE         0x0F
 
-// Legacy filesystem disk region used by filesystem.c
-#define FS_DISK_SECTOR 10
+// Legacy filesystem disk region used by filesystem.c.
+// Keep it away from the new block-based FS region to avoid on-disk overlap.
+#define FS_DISK_SECTOR 18400
 #define FS_SECTOR_COUNT 320
 
 // --- Common Definitions ---
@@ -68,13 +69,9 @@ extern User user_table[MAX_USERS];
 extern int user_count;
 extern int current_user_idx; // -1 means no user logged in
 
-// --- Filesystem Configuration (legacy compatibility) ---
-#define MAX_FILE_CONTENT 2048   // DEPRECATED: Use block-based storage instead
+// --- Filesystem Configuration ---
+#define MAX_FILE_CONTENT 2048
 #define MAX_FILE_NAME 32
-#define MAX_FILES 8             // DEPRECATED: Use real FS with 4096 inodes
-#define MAX_FILE_SIZE 128       // DEPRECATED: Use block-based storage
-#define MAX_DIRS 4              // DEPRECATED: Use real FS
-#define MAX_DIR_NAME 32
 #define MAX_CMD_BUFFER 2048
 
 // --- Process Management ---
@@ -220,53 +217,11 @@ struct IDT_ptr {
     unsigned int base;
 } __attribute__((packed));
 
-// --- Filesystem Types (DEPRECATED - use FInode from filesystem_new.h) ---
-typedef enum {
-    NODE_FILE,
-    NODE_DIRECTORY
-} NodeType;
-
-// Legacy FSNode structure for backward compatibility
-// NOTE: This is deprecated. New code should use FInode from filesystem_new.h
-// which uses block pointers instead of inline content storage.
-typedef struct FSNode {
-    char name[MAX_NAME_LENGTH];
-    NodeType type;
-    int parent_idx;
-    int children_idx[MAX_CHILDREN];
-    int child_count;
-    char content[MAX_FILE_CONTENT];      // DEPRECATED: max 2KB per file
-    int content_size;
-    int used;
-    int owner_idx;                       // index of owning user
-    int group;                           // group owner
-    unsigned short permissions;          // rwx bits
-    } __attribute__((packed)) FSNode;
-
-typedef struct {
-    char name[MAX_DIR_NAME];
-    int used;
-    int parent;
-    } __attribute__((packed)) RamDir;
-
-typedef struct {
-    char name[MAX_FILE_NAME];
-    char data[MAX_FILE_SIZE];
-    int size;
-    int dir;
-} RamFile;
-
-// --- Global Variables (Legacy) ---
+// --- Global Variables ---
 extern volatile int ticks;
 extern char last_key;
 extern int just_saved;
 extern int skip_next_prompt;
-extern FSNode node_table[MAX_NODES];
-extern int node_count;
-extern int current_dir_idx;
-extern RamDir dir_table[MAX_DIRS];
-extern int dir_count;
-extern int current_dir;
 extern char history[10][64];
 extern int history_count;
 extern int line_start;
@@ -463,13 +418,7 @@ unsigned int syscall_invoke3(unsigned int number, unsigned int arg0, unsigned in
 #define SYS_WRITE      10u
 
 // Filesystem
-void init_filesystem(void);
 int fs_mkdir(const char* path);
-int fs_touch(const char* path, const char* content);
-int fs_rm(const char* path, int recursive);
-int resolve_path(const char* path);
-void get_full_path(int node_idx, char* path, int max_len);
-int parse_path(const char* path, char components[32][MAX_NAME_LENGTH], int* comp_count);
 
 #define FS_O_READ   0x01
 #define FS_O_WRITE  0x02
@@ -486,12 +435,6 @@ void fs_fd_close_for_pid(int pid);
 
 // ELF loader
 int elf_load(const char* path, PCB* proc);
-
-// Persistent storage
-void fs_save(void);
-void fs_load(void);
-int fs_ensure_default_directories(void);
-void fs_get_status(uint32_t* active_generation_out, int slot_validity[2]);
 
 // String utilities
 int str_len(const char* s);

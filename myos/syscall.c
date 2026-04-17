@@ -22,6 +22,51 @@ static void sc_memset(void* dst, unsigned char val, int n) {
     for (int i = 0; i < n; i++) d[i] = val;
 }
 
+// New block-based filesystem path (kept separate from legacy filesystem.c symbols)
+extern int newfs_fd_open(const char* path, int flags);
+extern int newfs_fd_close(int fd);
+extern int newfs_fd_read(int fd, char* buffer, int count);
+extern int newfs_fd_write(int fd, const char* buffer, int count);
+extern void newfs_fd_init(void);
+extern int newfs_stat(const char* path, FInode* stat_out);
+extern int newfs_mkdir(const char* path);
+extern int disk_fs_init(void);
+extern int disk_fs_format(void);
+
+static int newfs_ready = 0;
+static int ensure_newfs_layout(void) {
+    FInode tmp_inode;
+    if (newfs_stat("/tmp", &tmp_inode) >= 0) {
+        return 1;
+    }
+    if (newfs_mkdir("/tmp") >= 0) {
+        return 1;
+    }
+    return 0;
+}
+
+int fs_runtime_ensure_newfs(void) {
+    if (newfs_ready) return 1;
+    if (disk_fs_init() == 0) {
+        if (ensure_newfs_layout()) {
+            newfs_fd_init();
+            newfs_ready = 1;
+            return 1;
+        }
+    }
+    // If image is not formatted yet, format once and re-init.
+    if (disk_fs_format() != 0) return 0;
+    if (disk_fs_init() != 0) return 0;
+    if (!ensure_newfs_layout()) return 0;
+    newfs_fd_init();
+    newfs_ready = 1;
+    return 1;
+}
+
+static int ensure_newfs_ready(void) {
+    return fs_runtime_ensure_newfs();
+}
+
 typedef struct {
     unsigned int addr;
     unsigned int len;
@@ -398,7 +443,8 @@ unsigned int linux_syscall_dispatch(unsigned int number,
             linux_term_write(buf, len);
             return (unsigned int)len;
         }
-        int r = fs_fd_write(fd, buf, len);
+        if (!ensure_newfs_ready()) return (unsigned int)LINUX_ENOSYS;
+        int r = newfs_fd_write(fd, buf, len);
         return (r < 0) ? (unsigned int)LINUX_EBADF : (unsigned int)r;
     }
 
@@ -426,7 +472,8 @@ unsigned int linux_syscall_dispatch(unsigned int number,
             buf[n] = 0;
             return (unsigned int)n;
         }
-        int r = fs_fd_read(fd, buf, len);
+        if (!ensure_newfs_ready()) return (unsigned int)LINUX_ENOSYS;
+        int r = newfs_fd_read(fd, buf, len);
         return (r < 0) ? (unsigned int)LINUX_EBADF : (unsigned int)r;
     }
 
@@ -442,13 +489,15 @@ unsigned int linux_syscall_dispatch(unsigned int number,
         if (flags & 0x40 /*O_CREAT*/) our_flags |= FS_O_CREATE;
         if (flags & 0x200/*O_TRUNC*/) our_flags |= FS_O_TRUNC;
         if (flags & 0x400/*O_APPEND*/) our_flags |= FS_O_APPEND;
-        int fd = fs_fd_open(path, our_flags);
+        if (!ensure_newfs_ready()) return (unsigned int)LINUX_ENOSYS;
+        int fd = newfs_fd_open(path, our_flags);
         return (fd < 0) ? (unsigned int)LINUX_ENOENT : (unsigned int)fd;
     }
 
     // ── close ────────────────────────────────────────────────────────────────
     case LINUX_SYS_CLOSE: {
-        int r = fs_fd_close((int)arg0);
+        if (!ensure_newfs_ready()) return (unsigned int)LINUX_ENOSYS;
+        int r = newfs_fd_close((int)arg0);
         return (r < 0) ? (unsigned int)LINUX_EBADF : 0;
     }
 
@@ -561,16 +610,20 @@ unsigned int syscall_dispatch(unsigned int number,
             ret = protection_get_cpl();
             break;
         case SYS_OPEN:
-            ret = (unsigned int)fs_fd_open((const char*)arg0, (int)arg1);
+            if (!ensure_newfs_ready()) ret = 0xFFFFFFFFu;
+            else ret = (unsigned int)newfs_fd_open((const char*)arg0, (int)arg1);
             break;
         case SYS_CLOSE:
-            ret = (unsigned int)fs_fd_close((int)arg0);
+            if (!ensure_newfs_ready()) ret = 0xFFFFFFFFu;
+            else ret = (unsigned int)newfs_fd_close((int)arg0);
             break;
         case SYS_READ:
-            ret = (unsigned int)fs_fd_read((int)arg0, (char*)arg1, (int)arg2);
+            if (!ensure_newfs_ready()) ret = 0xFFFFFFFFu;
+            else ret = (unsigned int)newfs_fd_read((int)arg0, (char*)arg1, (int)arg2);
             break;
         case SYS_WRITE:
-            ret = (unsigned int)fs_fd_write((int)arg0, (const char*)arg1, (int)arg2);
+            if (!ensure_newfs_ready()) ret = 0xFFFFFFFFu;
+            else ret = (unsigned int)newfs_fd_write((int)arg0, (const char*)arg1, (int)arg2);
             break;
         default:
             ret = 0xFFFFFFFFu;

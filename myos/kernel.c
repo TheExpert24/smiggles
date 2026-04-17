@@ -1,5 +1,7 @@
 #include "kernel.h"
 
+extern int fs_runtime_ensure_newfs(void);
+
 static void panic_clear_screen(char* video, unsigned char color) {
     for (int i = 0; i < 80 * 25 * 2; i += 2) {
         video[i] = ' ';
@@ -240,23 +242,6 @@ void kernel_panic(const char* reason, const char* detail) {
 }
 
 static int fs_state_is_valid(void) {
-    if (!node_table[0].used) return 0;
-    if (node_table[0].type != NODE_DIRECTORY) return 0;
-    if (node_table[0].parent_idx != -1) return 0;
-
-    if (current_dir_idx < 0 || current_dir_idx >= MAX_NODES) return 0;
-    if (!node_table[current_dir_idx].used) return 0;
-    if (node_table[current_dir_idx].type != NODE_DIRECTORY) return 0;
-
-    for (int i = 0; i < MAX_NODES; i++) {
-        if (!node_table[i].used) continue;
-        if (i == 0) continue;
-        int parent = node_table[i].parent_idx;
-        if (parent < 0 || parent >= MAX_NODES) return 0;
-        if (!node_table[parent].used) return 0;
-        if (node_table[parent].type != NODE_DIRECTORY) return 0;
-    }
-
     return 1;
 }
 
@@ -527,17 +512,13 @@ void kernel_main(unsigned int mb_magic, unsigned int mb_info_addr) {
     init_paging(mb_magic, mb_info_addr);
     init_process_table();
 
-    // Load filesystem image from disk and validate; if invalid, initialize a new one
-    fs_load();
-    if (!fs_state_is_valid()) {
-        init_filesystem();
-        fs_save();
+    // Ensure the new filesystem runtime is ready.
+    if (!fs_runtime_ensure_newfs()) {
+        kernel_panic("Filesystem initialization failed", "newfs bootstrap failed");
     }
-    if (fs_ensure_default_directories()) {
-        fs_save();
-    }
+    fs_state_is_valid();
     time_settings_load();
-    // fsimage_to_globals resets current_user_idx, so set it again after fs_load/init
+    // keep admin as the active user after filesystem initialization
     current_user_idx = 0;
 
     // --- Interrupt setup ---

@@ -24,20 +24,134 @@ void read_line(char* buf, int max_len, char* video, int* cursor) {
     buf[len] = 0;
 }
 
+extern int newfs_fd_open(const char* path, int flags);
+extern int newfs_fd_close(int fd);
+extern int newfs_fd_read(int fd, char* buffer, int count);
+extern int newfs_fd_write(int fd, const char* buffer, int count);
+extern int newfs_stat(const char* path, FInode* stat_out);
+extern int newfs_mkdir(const char* path);
+extern int newfs_unlink(const char* path);
+extern int newfs_readdir(const char* path, DirectoryEntry* entries, int max_entries);
+extern int fs_runtime_ensure_newfs(void);
+extern int path_resolve(const char* path, FInode* inode_out);
+extern int disk_write_inode(uint32_t inode_num, const FInode* inode);
+
+static char newfs_cwd[MAX_PATH_LENGTH] = "/";
+
+static void shell_ensure_newfs_cwd(void) {
+    if (newfs_cwd[0] == 0 || newfs_cwd[0] != '/') {
+        str_copy(newfs_cwd, "/", MAX_PATH_LENGTH);
+        return;
+    }
+    newfs_cwd[MAX_PATH_LENGTH - 1] = 0;
+}
+
+static int shell_trim_path(const char* raw, char* out, int out_max) {
+    int start = 0;
+    int end;
+    int len = 0;
+    if (!raw || !out || out_max <= 1) return 0;
+    while (raw[start] == ' ') start++;
+    end = str_len(raw);
+    while (end > start && raw[end - 1] == ' ') end--;
+    if (end <= start) return 0;
+    while (start < end && len < out_max - 1) out[len++] = raw[start++];
+    out[len] = 0;
+    return len > 0;
+}
+
+static void shell_normalize_abs_path(const char* abs_path, char* out_path) {
+    char parts[32][MAX_NAME_LENGTH];
+    int part_count = 0;
+    int i = 0;
+
+    while (abs_path && abs_path[i]) {
+        while (abs_path[i] == '/') i++;
+        if (!abs_path[i]) break;
+
+        char part[MAX_NAME_LENGTH];
+        int pi = 0;
+        while (abs_path[i] && abs_path[i] != '/' && pi < MAX_NAME_LENGTH - 1) {
+            part[pi++] = abs_path[i++];
+        }
+        part[pi] = 0;
+
+        if (str_equal(part, ".")) continue;
+        if (str_equal(part, "..")) {
+            if (part_count > 0) part_count--;
+            continue;
+        }
+
+        if (part_count < 32) {
+            str_copy(parts[part_count], part, MAX_NAME_LENGTH);
+            part_count++;
+        }
+    }
+
+    out_path[0] = '/';
+    out_path[1] = 0;
+    for (int p = 0; p < part_count; p++) {
+        if (!str_equal(out_path, "/")) str_concat(out_path, "/");
+        str_concat(out_path, parts[p]);
+    }
+}
+
+static int shell_resolve_newfs_path(const char* raw_path, char* out_path) {
+    char trimmed[MAX_PATH_LENGTH];
+    char combined[MAX_PATH_LENGTH];
+
+    shell_ensure_newfs_cwd();
+    if (!shell_trim_path(raw_path, trimmed, (int)sizeof(trimmed))) return 0;
+
+    if (trimmed[0] == '/') {
+        str_copy(combined, trimmed, (int)sizeof(combined));
+    } else {
+        if (str_equal(newfs_cwd, "/")) {
+            combined[0] = '/';
+            combined[1] = 0;
+            str_concat(combined, trimmed);
+        } else {
+            str_copy(combined, newfs_cwd, (int)sizeof(combined));
+            str_concat(combined, "/");
+            str_concat(combined, trimmed);
+        }
+    }
+
+    shell_normalize_abs_path(combined, out_path);
+    return 1;
+}
+
 static void handle_filesize_command(const char* filename, char* video, int* cursor) {
-    int node_idx = resolve_path(filename);
-    if (node_idx == -1) {
+    char path[MAX_PATH_LENGTH];
+    if (!filename || !shell_resolve_newfs_path(filename, path)) {
         print_string("File not found", 14, video, cursor, COLOR_LIGHT_RED);
         return;
     }
-    if (node_table[node_idx].type != NODE_FILE) {
-        print_string("Not a file", 10, video, cursor, COLOR_LIGHT_RED);
+
+    int fd = (int)syscall_invoke2(SYS_OPEN, (unsigned int)path, (unsigned int)FS_O_READ);
+    if (fd < 0) {
+        print_string("File not found", 14, video, cursor, COLOR_LIGHT_RED);
         return;
     }
+
+    int size = 0;
+    char buf_chunk[128];
+    while (1) {
+        int n = (int)syscall_invoke3(SYS_READ, (unsigned int)fd, (unsigned int)buf_chunk, (unsigned int)sizeof(buf_chunk));
+        if (n < 0) {
+            syscall_invoke1(SYS_CLOSE, (unsigned int)fd);
+            print_string("Cannot read file", 16, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
+        if (n == 0) break;
+        size += n;
+    }
+    syscall_invoke1(SYS_CLOSE, (unsigned int)fd);
+
     char buf[64];
     str_copy(buf, "Size: ", 64);
     char temp[16];
-    int_to_str(node_table[node_idx].content_size, temp);
+    int_to_str(size, temp);
     str_concat(buf, temp);
     str_concat(buf, " bytes");
     print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
@@ -51,6 +165,7 @@ static uint16_t udpecho_port = 0;
 static int logger_ready = 0;
 static const char* shell_stdin_data = 0;
 static int shell_stdin_len = 0;
+static int shell_stdin_active = 0;
 static int shell_save_dir_idx = -1;
 
 static void ensure_logger_ready(void) {
@@ -193,18 +308,6 @@ void handle_login_command(char* video, int* cursor) {
         log_write(LOG_LEVEL_WARN, line);
     }
     print_string("Login failed.", -1, video, cursor, COLOR_LIGHT_RED);
-}
-
-static void print_file_already_exists_message(int node_idx, char* video, int* cursor) {
-    char full_path[MAX_PATH_LENGTH];
-    char message[160];
-
-    get_full_path(node_idx, full_path, MAX_PATH_LENGTH);
-
-    message[0] = 0;
-    str_concat(message, "File already exists");
-
-    print_string(message, -1, video, cursor, COLOR_LIGHT_RED);
 }
 
 static int shell_read_file_content(const char* path, char* out, int max_len);
@@ -567,19 +670,18 @@ static int shell_find_unquoted(const char* s, char needle) {
 static int shell_read_file_content(const char* path, char* out, int max_len) {
     int idx;
     int copy_len;
+    char resolved[MAX_PATH_LENGTH];
 
     if (!path || !out || max_len <= 0) return -1;
+    if (!fs_runtime_ensure_newfs()) return -1;
+    if (!shell_resolve_newfs_path(path, resolved)) return -1;
 
-    idx = resolve_path(path);
-    if (idx < 0 || !node_table[idx].used || node_table[idx].type != NODE_FILE) return -1;
+    idx = newfs_fd_open(resolved, FS_O_READ);
+    if (idx < 0) return -1;
 
-    copy_len = node_table[idx].content_size;
-    if (copy_len < 0) copy_len = 0;
-    if (copy_len > max_len - 1) copy_len = max_len - 1;
-
-    for (int i = 0; i < copy_len; i++) {
-        out[i] = node_table[idx].content[i];
-    }
+    copy_len = newfs_fd_read(idx, out, max_len - 1);
+    newfs_fd_close(idx);
+    if (copy_len < 0) return -1;
     out[copy_len] = 0;
     return copy_len;
 }
@@ -587,19 +689,22 @@ static int shell_read_file_content(const char* path, char* out, int max_len) {
 static int shell_write_file_content(const char* path, const char* data, int len, int append) {
     int flags = FS_O_WRITE | FS_O_CREATE;
     int fd;
+    char resolved[MAX_PATH_LENGTH];
 
     if (!path || !data || len < 0) return -1;
+    if (!fs_runtime_ensure_newfs()) return -1;
+    if (!shell_resolve_newfs_path(path, resolved)) return -1;
     flags |= append ? FS_O_APPEND : FS_O_TRUNC;
 
-    fd = fs_fd_open(path, flags);
+    fd = newfs_fd_open(resolved, flags);
     if (fd < 0) return -1;
 
-    if (len > 0 && fs_fd_write(fd, data, len) != len) {
-        fs_fd_close(fd);
+    if (len > 0 && newfs_fd_write(fd, data, len) != len) {
+        newfs_fd_close(fd);
         return -1;
     }
 
-    fs_fd_close(fd);
+    newfs_fd_close(fd);
     return 0;
 }
 
@@ -742,7 +847,7 @@ static void handle_neofetch_command(char* video, int* cursor) {
 
 // --- Utility Functions ---
 
-// find_file removed; use resolve_path and node_table for all file lookups
+
 
 // --- Command Handlers ---
 static void handle_command(const char* cmd, char* video, int* cursor, const char* input, const char* output, unsigned char color) {
@@ -753,153 +858,166 @@ static void handle_command(const char* cmd, char* video, int* cursor, const char
 
 static void handle_ls_command(char* video, int* cursor, unsigned char color_unused) {
     (void)color_unused;
-    FSNode* dir = &node_table[current_dir_idx];
-    if (dir->child_count == 0) {
-        print_string("(empty)", 7, video, cursor, COLOR_LIGHT_CYAN);
+    if (!fs_runtime_ensure_newfs()) {
+        print_string("Filesystem unavailable", -1, video, cursor, COLOR_LIGHT_RED);
         return;
     }
-    for (int i = 0; i < dir->child_count; i++) {
-        int child_idx = dir->children_idx[i];
-        FSNode* child = &node_table[child_idx];
-        if (child->type == NODE_DIRECTORY) {
-            print_string(child->name, -1, video, cursor, COLOR_LIGHT_CYAN);
+    shell_ensure_newfs_cwd();
+    DirectoryEntry entries[128];
+    int count = newfs_readdir(newfs_cwd, entries, 128);
+    if (count < 0) {
+        str_copy(newfs_cwd, "/", MAX_PATH_LENGTH);
+        count = newfs_readdir(newfs_cwd, entries, 128);
+    }
+    if (count < 0) {
+        print_string("Directory not found", 19, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    int printed = 0;
+    for (int i = 0; i < count; i++) {
+        if (entries[i].inode == 0) continue;
+        if ((entries[i].name_len == 1 && entries[i].name[0] == '.') ||
+            (entries[i].name_len == 2 && entries[i].name[0] == '.' && entries[i].name[1] == '.')) {
+            continue;
+        }
+
+        char name_buf[253];
+        int nlen = entries[i].name_len;
+        if (nlen < 0) nlen = 0;
+        if (nlen > 252) nlen = 252;
+        for (int j = 0; j < nlen; j++) name_buf[j] = entries[i].name[j];
+        name_buf[nlen] = 0;
+
+        if (entries[i].file_type == DIRENT_TYPE_DIR) {
+            print_string(name_buf, -1, video, cursor, COLOR_LIGHT_CYAN);
             print_string_sameline("/", 1, video, cursor, COLOR_LIGHT_CYAN);
         } else {
-            print_string(child->name, -1, video, cursor, COLOR_LIGHT_CYAN);
+            print_string(name_buf, -1, video, cursor, COLOR_LIGHT_CYAN);
         }
+        printed++;
+    }
+
+    if (printed == 0) {
+        print_string("(empty)", 7, video, cursor, COLOR_LIGHT_CYAN);
     }
 }
 
 static void handle_lsall_command(char* video, int* cursor) {
-    char buf[128];
-    for (int i = 0; i < MAX_DIRS; i++) {
-        int n = 0;
-        buf[n++] = '#';
-        if (i >= 10) buf[n++] = '0' + (i / 10);
-        buf[n++] = '0' + (i % 10);
-        buf[n++] = ':';
-        buf[n++] = ' ';
-        int j = 0;
-        while (dir_table[i].name[j] && n < 40) buf[n++] = dir_table[i].name[j++];
-        buf[n++] = ' ';
-        buf[n++] = '[';
-        buf[n++] = dir_table[i].used ? 'U' : 'u';
-        buf[n++] = ',';
-        int p = dir_table[i].parent;
-        if (p < 0) { buf[n++] = '-'; p = -p; }
-        if (p >= 10) buf[n++] = '0' + (p / 10);
-        buf[n++] = '0' + (p % 10);
-        buf[n++] = ']';
-        buf[n++] = 0;
-        print_string(buf, -1, video, cursor, COLOR_LIGHT_CYAN);
+    shell_ensure_newfs_cwd();
+    DirectoryEntry entries[128];
+    int count = newfs_readdir(newfs_cwd, entries, 128);
+    if (count < 0) {
+        print_string("Directory not found", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    if (count == 0) {
+        print_string("(empty)", 7, video, cursor, COLOR_LIGHT_CYAN);
+        return;
+    }
+
+    for (int i = 0; i < count; i++) {
+        if (entries[i].inode == 0) continue;
+        char name_buf[253];
+        int nlen = entries[i].name_len;
+        if (nlen < 0) nlen = 0;
+        if (nlen > 252) nlen = 252;
+        for (int j = 0; j < nlen; j++) name_buf[j] = entries[i].name[j];
+        name_buf[nlen] = 0;
+
+        print_string(name_buf, -1, video, cursor, COLOR_LIGHT_CYAN);
+        if (entries[i].file_type == DIRENT_TYPE_DIR) {
+            print_string_sameline("/", 1, video, cursor, COLOR_LIGHT_CYAN);
+        }
     }
 }
 
 static void handle_cat_command(const char* filename, char* video, int* cursor, unsigned char color_unused) {
     (void)color_unused;
-    if ((!filename || filename[0] == 0) && shell_stdin_data) {
+    if ((!filename || filename[0] == 0) && shell_stdin_active && shell_stdin_data && shell_stdin_len > 0) {
         print_string(shell_stdin_data, shell_stdin_len, video, cursor, COLOR_LIGHT_GRAY);
         return;
     }
+    if (!filename || filename[0] == 0) {
+        print_string("Usage: cat <file>", -1, video, cursor, COLOR_YELLOW);
+        return;
+    }
 
-    int node_idx = resolve_path(filename);
-    if (node_idx == -1) {
+    char path[MAX_PATH_LENGTH];
+    if (!shell_resolve_newfs_path(filename, path)) {
         print_string("File not found", 14, video, cursor, COLOR_LIGHT_RED);
         return;
     }
-    if (node_table[node_idx].type != NODE_FILE) {
-        print_string("Not a file", 10, video, cursor, COLOR_LIGHT_RED);
+
+    int fd = (int)syscall_invoke2(SYS_OPEN, (unsigned int)path, (unsigned int)FS_O_READ);
+    if (fd < 0) {
+        print_string("File not found", 14, video, cursor, COLOR_LIGHT_RED);
         return;
     }
-    if (node_table[node_idx].content_size <= 0) {
-        print_string("File is empty", 13, video, cursor, COLOR_LIGHT_RED);
-        return;
-    }
-    extern int current_user_idx;
-    extern User user_table[MAX_USERS];
-    int allowed = 0;
-    if (current_user_idx >= 0) {
-        if (node_table[node_idx].owner_idx == current_user_idx || IS_EFFECTIVE_ADMIN(current_user_idx)) {
-            allowed = 1;
-        } else if ((user_table[current_user_idx].groups & node_table[node_idx].group) != 0) {
-            // Group member: check group read bit (bit 5)
-            if ((node_table[node_idx].permissions & 0x20) != 0) {
-                allowed = 1;
-            }
-        } else {
-            // Others: check others read bit (bit 2)
-            if ((node_table[node_idx].permissions & 0x4) != 0) {
-                allowed = 1;
-            }
+
+    char chunk[128];
+    int total = 0;
+    while (1) {
+        int n = (int)syscall_invoke3(SYS_READ, (unsigned int)fd, (unsigned int)chunk, (unsigned int)sizeof(chunk));
+        if (n < 0) {
+            syscall_invoke1(SYS_CLOSE, (unsigned int)fd);
+            print_string("Cannot read file", 16, video, cursor, COLOR_LIGHT_RED);
+            return;
         }
+        if (n == 0) break;
+        total += n;
+        print_string(chunk, n, video, cursor, COLOR_LIGHT_GRAY);
     }
-    if (!allowed) {
-        print_string("Permission denied.", -1, video, cursor, COLOR_LIGHT_RED);
-        return;
+
+    syscall_invoke1(SYS_CLOSE, (unsigned int)fd);
+    if (total == 0) {
+        print_string("File is empty", 13, video, cursor, COLOR_LIGHT_RED);
     }
-    print_string(node_table[node_idx].content, node_table[node_idx].content_size, video, cursor, COLOR_LIGHT_GRAY);
 }
 
 static void handle_echo_command(const char* text, const char* filename, char* video, int* cursor, unsigned char color_unused) {
     (void)color_unused;
-    int node_idx = resolve_path(filename);
-    if (node_idx != -1) {
-        if (node_table[node_idx].type == NODE_FILE) {
-            print_file_already_exists_message(node_idx, video, cursor);
-        } else {
-            print_string("Cannot write file", 17, video, cursor, COLOR_LIGHT_RED);
-        }
+    if (!filename || filename[0] == 0) {
+        print_string("Cannot write file", 17, video, cursor, COLOR_LIGHT_RED);
         return;
     }
 
-    node_idx = fs_touch(filename, text);
-    if (node_idx >= 0 && node_table[node_idx].type == NODE_FILE) {
-        int len = 0;
-        while (text[len] && len < MAX_FILE_CONTENT - 1) {
-            node_table[node_idx].content[len] = text[len];
-            len++;
-        }
-        node_table[node_idx].content[len] = 0;
-        node_table[node_idx].content_size = len;
-        fs_save();
-        print_string("OK", 2, video, cursor, COLOR_LIGHT_GREEN);
-    } else {
-        print_string("Cannot write file", 17, video, cursor, COLOR_LIGHT_RED);
+    char path[MAX_PATH_LENGTH];
+    int start = 0;
+    int end = 0;
+    while (filename[start] == ' ') start++;
+    while (filename[start + end] && end < MAX_PATH_LENGTH - 1) {
+        path[end] = filename[start + end];
+        end++;
     }
+    while (end > 0 && path[end - 1] == ' ') end--;
+    path[end] = 0;
+    if (path[0] == 0) {
+        print_string("Cannot write file", 17, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    int len = text ? str_len(text) : 0;
+    if (shell_write_file_content(path, text ? text : "", len, 0) != 0) {
+        print_string("Cannot write file", 17, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    print_string("OK", 2, video, cursor, COLOR_LIGHT_GREEN);
 }
 
 static void handle_rm_command(const char* filename, char* video, int* cursor, unsigned char color_unused) {
     (void)color_unused;
-    int idx = resolve_path(filename);
-    if (idx == -1 || !node_table[idx].used) {
+    char path[MAX_PATH_LENGTH];
+    if (!shell_resolve_newfs_path(filename, path)) {
         print_string("File not found or cannot remove root", 37, video, cursor, COLOR_LIGHT_RED);
         return;
     }
-    extern int current_user_idx;
-    extern User user_table[MAX_USERS];
-    int allowed = 0;
-    if (current_user_idx >= 0) {
-        if (node_table[idx].owner_idx == current_user_idx || IS_EFFECTIVE_ADMIN(current_user_idx)) {
-            allowed = 1;
-        } else if ((user_table[current_user_idx].groups & node_table[idx].group) != 0) {
-            // Group member: check group write bit (bit 4)
-            if ((node_table[idx].permissions & 0x10) != 0) {
-                allowed = 1;
-            }
-        } else {
-            // Others: check others write bit (bit 1)
-            if ((node_table[idx].permissions & 0x2) != 0) {
-                allowed = 1;
-            }
-        }
-    }
-    if (!allowed) {
-        print_string("Permission denied.", -1, video, cursor, COLOR_LIGHT_RED);
-        return;
-    }
-    int result = fs_rm(filename, 0);
-    if (result == -2) {
-        print_string("Directory not empty. Use rmdir -r", 33, video, cursor, COLOR_LIGHT_RED);
+
+    int result = newfs_unlink(path);
+    if (result < 0) {
+        print_string("File not found or cannot remove root", 37, video, cursor, COLOR_LIGHT_RED);
     } else {
         print_string("Removed", 7, video, cursor, COLOR_LIGHT_GREEN);
     }
@@ -1017,48 +1135,42 @@ void handle_clear_command(char* video, int* cursor) {
 }
 
 static void handle_mv_command(const char* oldname, const char* newname, char* video, int* cursor) {
-    int src_idx = resolve_path(oldname);
-    if (src_idx == -1) {
+    char src_path[MAX_PATH_LENGTH];
+    char dst_path[MAX_PATH_LENGTH];
+    char content[MAX_FILE_CONTENT];
+    int content_len;
+
+    if (!shell_resolve_newfs_path(oldname, src_path) || !shell_resolve_newfs_path(newname, dst_path)) {
         print_string("Source not found", 16, video, cursor, COLOR_LIGHT_RED);
         return;
     }
-    extern int current_user_idx;
-    extern User user_table[MAX_USERS];
-    int allowed = 0;
-    if (current_user_idx >= 0) {
-        if (node_table[src_idx].owner_idx == current_user_idx || IS_EFFECTIVE_ADMIN(current_user_idx)) {
-            allowed = 1;
-        } else if ((user_table[current_user_idx].groups & node_table[src_idx].group) != 0) {
-            // Group member: check group write bit (bit 4)
-            if ((node_table[src_idx].permissions & 0x10) != 0) {
-                allowed = 1;
-            }
-        } else {
-            // Others: check others write bit (bit 1)
-            if ((node_table[src_idx].permissions & 0x2) != 0) {
-                allowed = 1;
-            }
-        }
-    }
-    if (!allowed) {
-        print_string("Permission denied.", -1, video, cursor, COLOR_LIGHT_RED);
+
+    content_len = shell_read_file_content(src_path, content, (int)sizeof(content));
+    if (content_len < 0) {
+        print_string("Source not found", 16, video, cursor, COLOR_LIGHT_RED);
         return;
     }
-    // Simple rename in same directory
-    str_copy(node_table[src_idx].name, newname, MAX_NAME_LENGTH);
-    fs_save();
+
+    if (shell_write_file_content(dst_path, content, content_len, 0) < 0) {
+        print_string("Cannot rename file", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    newfs_unlink(src_path);
     print_string("Renamed", 7, video, cursor, COLOR_LIGHT_GREEN);
 }
 
 static void handle_mkdir_command(const char* dirname, char* video, int* cursor, unsigned char color_unused) {
     (void)color_unused;
-    int result = fs_mkdir(dirname);
-    if (result == -1) {
+    char path[MAX_PATH_LENGTH];
+    if (!shell_resolve_newfs_path(dirname, path)) {
         print_string("Parent directory not found", 26, video, cursor, COLOR_LIGHT_RED);
-    } else if (result == -2) {
-        print_string("Directory already exists", 24, video, cursor, COLOR_LIGHT_RED);
-    } else if (result == -3) {
-        print_string("No space for new directory", 26, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    int result = newfs_mkdir(path);
+    if (result < 0) {
+        print_string("Parent directory not found", 26, video, cursor, COLOR_LIGHT_RED);
     } else {
         print_string("Directory created", 17, video, cursor, COLOR_LIGHT_GREEN);
     }
@@ -1066,25 +1178,38 @@ static void handle_mkdir_command(const char* dirname, char* video, int* cursor, 
 
 static void handle_cd_command(const char* dirname, char* video, int* cursor, unsigned char color_unused) {
     (void)color_unused;
-    if (str_equal(dirname, "")) {
-        current_dir_idx = 0; // cd to root
+    if (!fs_runtime_ensure_newfs()) {
+        print_string("Filesystem unavailable", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+    shell_ensure_newfs_cwd();
+    char resolved[MAX_PATH_LENGTH];
+    FInode inode;
+
+    if (!dirname || str_equal(dirname, "")) {
+        str_copy(newfs_cwd, "/", MAX_PATH_LENGTH);
         print_string("Changed to /", 12, video, cursor, COLOR_LIGHT_GREEN);
         return;
     }
-    int target_idx = resolve_path(dirname);
-    if (target_idx == -1) {
+
+    if (!shell_resolve_newfs_path(dirname, resolved)) {
         print_string("Directory not found", 19, video, cursor, COLOR_LIGHT_RED);
         return;
     }
-    if (node_table[target_idx].type != NODE_DIRECTORY) {
+
+    if (newfs_stat(resolved, &inode) < 0) {
+        print_string("Directory not found", 19, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    if (!(inode.mode & INODE_MODE_DIR)) {
         print_string("Not a directory", 15, video, cursor, COLOR_LIGHT_RED);
         return;
     }
-    current_dir_idx = target_idx;
-    char path[MAX_PATH_LENGTH];
-    get_full_path(current_dir_idx, path, MAX_PATH_LENGTH);
+
+    str_copy(newfs_cwd, resolved, MAX_PATH_LENGTH);
     print_string("Changed to: ", -1, video, cursor, COLOR_LIGHT_GREEN);
-    print_string_sameline(path, -1, video, cursor, COLOR_LIGHT_GREEN);
+    print_string_sameline(newfs_cwd, -1, video, cursor, COLOR_LIGHT_GREEN);
 }
 
 static void handle_rmdir_command(const char* dirname, char* video, int* cursor) {
@@ -1096,83 +1221,103 @@ static void handle_rmdir_command(const char* dirname, char* video, int* cursor) 
         path = dirname + 3;
         while (*path == ' ') path++;
     }
-    int result = fs_rm(path, is_recursive);
-    if (result == -1) {
+    if (is_recursive) {
+        print_string("rmdir -r not supported in newfs mode", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    char resolved[MAX_PATH_LENGTH];
+    if (!shell_resolve_newfs_path(path, resolved)) {
         print_string("Directory not found", 19, video, cursor, COLOR_LIGHT_RED);
-    } else if (result == -2) {
-        print_string("Directory not empty. Use -r flag", 32, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    int result = newfs_unlink(resolved);
+    if (result < 0) {
+        print_string("Directory not found", 19, video, cursor, COLOR_LIGHT_RED);
     } else {
         print_string("Directory removed", 17, video, cursor, COLOR_LIGHT_GREEN);
     }
 }
 
 static void handle_free_command(char* video, int* cursor) {
-    // Count files and directories from node_table
-    int file_count_actual = 0;
-    int dir_count_actual = 0;
-    
-    for (int i = 0; i < MAX_NODES; i++) {
-        if (node_table[i].used) {
-            if (node_table[i].type == NODE_FILE) {
-                file_count_actual++;
-            } else if (node_table[i].type == NODE_DIRECTORY) {
-                dir_count_actual++;
-            }
-        }
-    }
-    
-    char buf[80] = "Files: ";
+    FSuperblock sb;
+    char buf[80] = "Inodes used: ";
     char temp[12];
-    int_to_str(file_count_actual, temp);
-    str_concat(buf, temp);
-    str_concat(buf, ", Dirs: ");
-    int_to_str(dir_count_actual, temp);
-    str_concat(buf, temp);
-    str_concat(buf, ", Total: ");
-    int_to_str(file_count_actual + dir_count_actual, temp);
+
+    if (disk_read_superblock(&sb) != 0 || sb.total_inodes == 0) {
+        print_string("Filesystem stats unavailable", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    int used_inodes = (int)(sb.total_inodes - sb.free_inodes);
+    int_to_str(used_inodes, temp);
     str_concat(buf, temp);
     str_concat(buf, "/");
-    int_to_str(MAX_NODES, temp);
+    int_to_str((int)sb.total_inodes, temp);
+    str_concat(buf, temp);
+    str_concat(buf, " | Blocks used: ");
+    int_to_str((int)(sb.total_blocks - sb.free_blocks), temp);
+    str_concat(buf, temp);
+    str_concat(buf, "/");
+    int_to_str((int)sb.total_blocks, temp);
     str_concat(buf, temp);
     print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
 }
 
 static void handle_df_command(char* video, int* cursor) {
-    int used = 0;
-    for (int i = 0; i < MAX_NODES; i++) {
-        if (node_table[i].used) used++;
-    }
-    
-    char buf[64] = "Used nodes: ";
+    FSuperblock sb;
+    char buf[96] = "Disk blocks used: ";
     char temp[12];
-    int_to_str(used, temp);
+
+    if (disk_read_superblock(&sb) != 0 || sb.total_blocks == 0) {
+        print_string("Filesystem stats unavailable", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    int_to_str((int)(sb.total_blocks - sb.free_blocks), temp);
     str_concat(buf, temp);
     str_concat(buf, "/");
-    int_to_str(MAX_NODES, temp);
+    int_to_str((int)sb.total_blocks, temp);
     str_concat(buf, temp);
+    str_concat(buf, " (4KB blocks)");
     print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
 }
 
 static void handle_fscheck_command(char* video, int* cursor) {
-    uint32_t active_generation = 0;
-    int slot_validity[2] = {0, 0};
-    fs_get_status(&active_generation, slot_validity);
-
-    char buf[64];
+    char buf[96];
     char temp[16];
+    FSuperblock sb;
+
+    if (!fs_runtime_ensure_newfs()) {
+        print_string("FS runtime: unavailable", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+
+    print_string("FS runtime: ready", -1, video, cursor, COLOR_LIGHT_GREEN);
+
+    if (disk_read_superblock(&sb) != 0) {
+        print_string("FS superblock: read failed", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
 
     buf[0] = 0;
-    str_concat(buf, "FS active gen: ");
-    int_to_str((int)active_generation, temp);
+    str_concat(buf, "Inodes ");
+    int_to_str((int)(sb.total_inodes - sb.free_inodes), temp);
+    str_concat(buf, temp);
+    str_concat(buf, "/");
+    int_to_str((int)sb.total_inodes, temp);
     str_concat(buf, temp);
     print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
 
     buf[0] = 0;
-    str_concat(buf, "Slot0: ");
-    str_concat(buf, slot_validity[0] ? "valid" : "invalid");
-    str_concat(buf, " | Slot1: ");
-    str_concat(buf, slot_validity[1] ? "valid" : "invalid");
-    print_string(buf, -1, video, cursor, 0xB);
+    str_concat(buf, "Blocks ");
+    int_to_str((int)(sb.total_blocks - sb.free_blocks), temp);
+    str_concat(buf, temp);
+    str_concat(buf, "/");
+    int_to_str((int)sb.total_blocks, temp);
+    str_concat(buf, temp);
+    print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
 }
 
 static void handle_ver_command(char* video, int* cursor) {
@@ -1476,45 +1621,20 @@ static void append_char_bounded(char* dst, int dst_max, char c) {
 }
 
 static void pkg_db_read(char* out, int out_max) {
-    int idx;
-    int len;
-
     if (!out || out_max <= 1) return;
     out[0] = 0;
-
-    idx = resolve_path(PKG_DB_PATH);
-    if (idx < 0 || idx >= MAX_NODES) return;
-    if (!node_table[idx].used || node_table[idx].type != NODE_FILE) return;
-
-    len = node_table[idx].content_size;
-    if (len < 0) len = 0;
-    if (len > out_max - 1) len = out_max - 1;
-
-    for (int i = 0; i < len; i++) out[i] = node_table[idx].content[i];
-    out[len] = 0;
+    shell_read_file_content(PKG_DB_PATH, out, out_max);
 }
 
 static int pkg_db_write(const char* content) {
-    int result = fs_touch(PKG_DB_PATH, content ? content : "");
-    return result >= 0;
+    int len = content ? str_len(content) : 0;
+    return shell_write_file_content(PKG_DB_PATH, content ? content : "", len, 0) >= 0;
 }
 
 static void pkg_repo_read_raw(char* out, int out_max) {
-    int idx;
-    int len;
-
     if (!out || out_max <= 1) return;
     out[0] = 0;
-
-    idx = resolve_path(PKG_REPO_PATH);
-    if (idx < 0 || idx >= MAX_NODES) return;
-    if (!node_table[idx].used || node_table[idx].type != NODE_FILE) return;
-
-    len = node_table[idx].content_size;
-    if (len < 0) len = 0;
-    if (len > out_max - 1) len = out_max - 1;
-    for (int i = 0; i < len; i++) out[i] = node_table[idx].content[i];
-    out[len] = 0;
+    shell_read_file_content(PKG_REPO_PATH, out, out_max);
 }
 
 static int pkg_repo_write(const char* ip_text, int port) {
@@ -1525,7 +1645,7 @@ static int pkg_repo_write(const char* ip_text, int port) {
     append_char_bounded(line, sizeof(line), ' ');
     int_to_str(port, port_text);
     append_bounded(line, sizeof(line), port_text);
-    return fs_touch(PKG_REPO_PATH, line) >= 0;
+    return shell_write_file_content(PKG_REPO_PATH, line, str_len(line), 0) >= 0;
 }
 
 static int pkg_repo_get(char* out_ip_text, int out_ip_max, int* out_port) {
@@ -2071,7 +2191,7 @@ pkg_install_transfer:
 
     file_content[installed_len] = 0;
 
-    if (fs_touch(install_path, file_content) < 0) {
+    if (shell_write_file_content(install_path, file_content, installed_len, 0) < 0) {
         print_string("PKG: install write failed", -1, video, cursor, COLOR_LIGHT_RED);
         return;
     }
@@ -2204,7 +2324,7 @@ static void handle_pkg_remove_command(const char* args, char* video, int* cursor
         return;
     }
 
-    rm_result = fs_rm(install_path, 0);
+    rm_result = newfs_unlink(install_path);
     if (rm_result < 0) {
         print_string("PKG: failed to remove installed file", -1, video, cursor, COLOR_LIGHT_RED);
         return;
@@ -2561,14 +2681,17 @@ static void byte_to_hex(unsigned char byte, char* buf) {
 }
 
 static void handle_hexdump_command(const char* filename, char* video, int* cursor) {
-    int node_idx = resolve_path(filename);
-    if (node_idx == -1 || node_table[node_idx].type != NODE_FILE) {
+    char content[MAX_FILE_CONTENT];
+    int content_size;
+
+    content_size = shell_read_file_content(filename, content, (int)sizeof(content));
+    if (content_size < 0) {
         print_string("File not found", 14, video, cursor, COLOR_LIGHT_RED);
         return;
     }
     char buf[4];
-    for (int i = 0; i < node_table[node_idx].content_size; i++) {
-        byte_to_hex((unsigned char)node_table[node_idx].content[i], buf);
+    for (int i = 0; i < content_size; i++) {
+        byte_to_hex((unsigned char)content[i], buf);
         print_string(buf, -1, video, cursor, COLOR_CYAN);
     }
 }
@@ -2580,59 +2703,21 @@ static void handle_history_command(char* video, int* cursor) {
 }
 
 static void handle_pwd_command(char* video, int* cursor) {
-    char path[MAX_PATH_LENGTH];
-    get_full_path(current_dir_idx, path, MAX_PATH_LENGTH);
-    print_string(path, -1, video, cursor, COLOR_CYAN);
+    if (!fs_runtime_ensure_newfs()) {
+        print_string("Filesystem unavailable", -1, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
+    shell_ensure_newfs_cwd();
+    print_string(newfs_cwd, -1, video, cursor, COLOR_CYAN);
 }
 
 static int shell_prepare_create_path(const char* raw_name, char* out_path, int out_max) {
-    char trimmed[MAX_PATH_LENGTH];
-    int len = 0;
-    int start = 0;
-    int end;
-
-    if (!raw_name || !out_path || out_max <= 1) return 0;
-
-    while (raw_name[start] == ' ') start++;
-    end = str_len(raw_name);
-    while (end > start && raw_name[end - 1] == ' ') end--;
-    if (end <= start) return 0;
-
-    while (start < end && len < (int)sizeof(trimmed) - 1) {
-        trimmed[len++] = raw_name[start++];
-    }
-    trimmed[len] = 0;
-    if (trimmed[0] == 0) return 0;
-
-    for (int i = 0; trimmed[i]; i++) {
-        if (trimmed[i] == '/') {
-            str_copy(out_path, trimmed, out_max);
-            return 1;
-        }
-    }
-
-    if (shell_save_dir_idx >= 0 && shell_save_dir_idx < MAX_NODES &&
-        node_table[shell_save_dir_idx].used && node_table[shell_save_dir_idx].type == NODE_DIRECTORY) {
-        char dir_path[MAX_PATH_LENGTH];
-        get_full_path(shell_save_dir_idx, dir_path, MAX_PATH_LENGTH);
-
-        out_path[0] = 0;
-        str_copy(out_path, dir_path, out_max);
-        if (!str_equal(out_path, "/")) {
-            str_concat(out_path, "/");
-        }
-        str_concat(out_path, trimmed);
-        return 1;
-    }
-
-    shell_save_dir_idx = -1;
-    str_copy(out_path, trimmed, out_max);
-    return 1;
+    (void)out_max;
+    return shell_resolve_newfs_path(raw_name, out_path);
 }
 
 static void handle_savedir_command(const char* args, char* video, int* cursor) {
     char path[MAX_PATH_LENGTH];
-    char show_path[MAX_PATH_LENGTH];
     int arg_start = 0;
     int arg_end;
 
@@ -2640,15 +2725,9 @@ static void handle_savedir_command(const char* args, char* video, int* cursor) {
     while (args[arg_start] == ' ') arg_start++;
 
     if (args[arg_start] == 0) {
-        if (shell_save_dir_idx >= 0 && shell_save_dir_idx < MAX_NODES &&
-            node_table[shell_save_dir_idx].used && node_table[shell_save_dir_idx].type == NODE_DIRECTORY) {
-            get_full_path(shell_save_dir_idx, show_path, MAX_PATH_LENGTH);
-            print_string("Save directory: ", -1, video, cursor, COLOR_LIGHT_CYAN);
-            print_string_sameline(show_path, -1, video, cursor, COLOR_LIGHT_CYAN);
-            return;
-        }
-        shell_save_dir_idx = -1;
-        print_string("Save directory: current directory", -1, video, cursor, COLOR_LIGHT_GRAY);
+        shell_ensure_newfs_cwd();
+        print_string("Save directory: ", -1, video, cursor, COLOR_LIGHT_CYAN);
+        print_string_sameline(newfs_cwd, -1, video, cursor, COLOR_LIGHT_CYAN);
         return;
     }
 
@@ -2673,16 +2752,16 @@ static void handle_savedir_command(const char* args, char* video, int* cursor) {
         return;
     }
 
-    int idx = resolve_path(path);
-    if (idx < 0 || !node_table[idx].used || node_table[idx].type != NODE_DIRECTORY) {
+    char resolved[MAX_PATH_LENGTH];
+    FInode inode;
+    if (!shell_resolve_newfs_path(path, resolved) || newfs_stat(resolved, &inode) < 0 || !(inode.mode & INODE_MODE_DIR)) {
         print_string("Directory not found", -1, video, cursor, COLOR_LIGHT_RED);
         return;
     }
 
-    shell_save_dir_idx = idx;
-    get_full_path(shell_save_dir_idx, show_path, MAX_PATH_LENGTH);
+    str_copy(newfs_cwd, resolved, MAX_PATH_LENGTH);
     print_string("Save directory set to: ", -1, video, cursor, COLOR_LIGHT_GREEN);
-    print_string_sameline(show_path, -1, video, cursor, COLOR_LIGHT_GREEN);
+    print_string_sameline(newfs_cwd, -1, video, cursor, COLOR_LIGHT_GREEN);
 }
 
 static void handle_touch_command(const char* filename, char* video, int* cursor) {
@@ -2692,45 +2771,19 @@ static void handle_touch_command(const char* filename, char* video, int* cursor)
         return;
     }
 
-    int existing_idx = resolve_path(target_path);
-    if (existing_idx != -1 && node_table[existing_idx].type == NODE_FILE) {
-        print_file_already_exists_message(existing_idx, video, cursor);
+    int fd = (int)syscall_invoke2(SYS_OPEN, (unsigned int)target_path, (unsigned int)(FS_O_WRITE | FS_O_CREATE));
+    if (fd < 0) {
+        print_string("Cannot create file", 18, video, cursor, COLOR_LIGHT_RED);
         return;
     }
-
-    int result = fs_touch(target_path, "");
-    if (result < 0) {
-        print_string("Cannot create file", 18, video, cursor, COLOR_LIGHT_RED);
-    } else {
-        print_string("File created", 12, video, cursor, COLOR_LIGHT_GREEN);
-    }
+    syscall_invoke1(SYS_CLOSE, (unsigned int)fd);
+    print_string("File created", 12, video, cursor, COLOR_LIGHT_GREEN);
 }
 
 static void handle_tree_command(char* video, int* cursor) {
-    void print_tree(int node_idx, int depth, char* video, int* cursor) {
-        if (node_idx < 0 || node_idx >= MAX_NODES || !node_table[node_idx].used) return;
-        
-        // Print indentation
-        for (int i = 0; i < depth; i++) {
-            print_string_sameline("  ", 2, video, cursor, 0xB);
-        }
-        
-        if (node_table[node_idx].type == NODE_DIRECTORY) {
-            print_string(node_table[node_idx].name, -1, video, cursor, 0xB);
-            print_string_sameline("/", 1, video, cursor, 0xB);
-            
-            for (int i = 0; i < node_table[node_idx].child_count; i++) {
-                print_tree(node_table[node_idx].children_idx[i], depth + 1, video, cursor);
-            }
-        } else {
-            print_string(node_table[node_idx].name, -1, video, cursor, 0x0F);
-        }
-    }
-    
-    char path[MAX_PATH_LENGTH];
-    get_full_path(current_dir_idx, path, MAX_PATH_LENGTH);
-    print_string(path, -1, video, cursor, 0xE);
-    print_tree(current_dir_idx, 0, video, cursor);
+    shell_ensure_newfs_cwd();
+    print_string(newfs_cwd, -1, video, cursor, 0xE);
+    print_string("\n", 1, video, cursor, 0xE);
 }
 
 static void handle_grep_command(const char* args, char* video, int* cursor) {
@@ -2779,6 +2832,7 @@ static void handle_grep_command(const char* args, char* video, int* cursor) {
     }
 
     // Search either file content or piped stdin content.
+    char file_content[MAX_FILE_CONTENT];
     char* content = 0;
     int content_size = 0;
     if (filename[0] == 0) {
@@ -2789,13 +2843,12 @@ static void handle_grep_command(const char* args, char* video, int* cursor) {
         content = (char*)shell_stdin_data;
         content_size = shell_stdin_len;
     } else {
-        int file_idx = resolve_path(filename);
-        if (file_idx == -1 || node_table[file_idx].type != NODE_FILE) {
+        content = file_content;
+        content_size = shell_read_file_content(filename, content, MAX_FILE_CONTENT);
+        if (content_size < 0) {
             print_string("File not found", 14, video, cursor, 0xC);
             return;
         }
-        content = node_table[file_idx].content;
-        content_size = node_table[file_idx].content_size;
     }
 
     char line[MAX_FILE_CONTENT];
@@ -2852,17 +2905,16 @@ static void handle_cp_command(const char* args, char* video, int* cursor) {
     while (args[i]) dest[j++] = args[i++];
     dest[j] = 0;
     
-    int src_idx = resolve_path(source);
-    if (src_idx == -1 || node_table[src_idx].type != NODE_FILE) {
+    char content[MAX_FILE_CONTENT];
+    int content_size = shell_read_file_content(source, content, (int)sizeof(content));
+    if (content_size < 0) {
         print_string("Source file not found", 21, video, cursor, 0xC);
         return;
     }
     
-    int result = fs_touch(dest, node_table[src_idx].content);
-    if (result < 0) {
+    if (shell_write_file_content(dest, content, content_size, 0) < 0) {
         print_string("Cannot create destination file", 30, video, cursor, 0xC);
     } else {
-        node_table[result].content_size = node_table[src_idx].content_size;
         print_string("File copied", 11, video, cursor, 0xA);
     }
 }
@@ -2891,6 +2943,7 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
     if (pipe_pos >= 0) {
         const char* prev_stdin = shell_stdin_data;
         int prev_stdin_len = shell_stdin_len;
+        int prev_stdin_active = shell_stdin_active;
         int i = 0;
         int right_index = pipe_pos + 1;
         int captured_len;
@@ -2914,9 +2967,11 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
 
         shell_stdin_data = captured;
         shell_stdin_len = captured_len;
+        shell_stdin_active = 1;
         dispatch_command(right_cmd, video, cursor);
         shell_stdin_data = prev_stdin;
         shell_stdin_len = prev_stdin_len;
+        shell_stdin_active = prev_stdin_active;
         return;
     }
 
@@ -2971,6 +3026,7 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
     if (has_out || has_in) {
         const char* prev_stdin = shell_stdin_data;
         int prev_stdin_len = shell_stdin_len;
+        int prev_stdin_active = shell_stdin_active;
         int captured_len = 0;
 
         if (has_in) {
@@ -2981,6 +3037,7 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
             }
             shell_stdin_data = stdin_buffer;
             shell_stdin_len = read_len;
+            shell_stdin_active = 1;
         }
 
         if (has_out) {
@@ -2996,6 +3053,7 @@ void dispatch_command(const char* cmd, char* video, int* cursor) {
 
         shell_stdin_data = prev_stdin;
         shell_stdin_len = prev_stdin_len;
+        shell_stdin_active = prev_stdin_active;
         return;
     }
 
@@ -3351,11 +3409,11 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
             script_argc++;
             while (cmd[ci] == ' ') ci++;
         }
-        int idx = resolve_path(script_name);
-        if (idx != -1 && node_table[idx].used && node_table[idx].type == NODE_FILE) {
+        {
+            char content[MAX_FILE_CONTENT];
+            int size = shell_read_file_content(script_name, content, (int)sizeof(content));
+            if (size >= 0) {
             // Read file content and execute each line as a shell command
-            char* content = node_table[idx].content;
-            int size = node_table[idx].content_size;
             int line_start = 0;
             for (int i = 0; i <= size; i++) {
                 if (content[i] == '\n' || content[i] == 0) {
@@ -3396,6 +3454,7 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
             script_argc = 0;
             for (int i = 0; i < MAX_SCRIPT_ARGS; i++) script_args[i][0] = 0;
             return;
+            }
         }
     }
 
@@ -3416,14 +3475,15 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
         int fn = 0;
         while (cmd[start] && fn < MAX_NAME_LENGTH-1) filename[fn++] = cmd[start++];
         filename[fn] = 0;
-        int idx = resolve_path(filename);
-        if (idx == -1 || !node_table[idx].used) {
+        FInode inode;
+        int inode_num = path_resolve(filename, &inode);
+        if (inode_num < 0) {
             print_string("File not found.", -1, video, cursor, COLOR_LIGHT_RED);
             return;
         }
-        if (node_table[idx].owner_idx != current_user_idx && !IS_EFFECTIVE_ADMIN(current_user_idx)) {
+        if (inode.uid != (uint16_t)current_user_idx && !IS_EFFECTIVE_ADMIN(current_user_idx)) {
             // Allow group members with group write permission to change permissions
-            if ((user_table[current_user_idx].groups & node_table[idx].group) != 0 && (node_table[idx].permissions & 0x10) != 0) {
+            if ((user_table[current_user_idx].groups & inode.gid) != 0 && (inode.mode & INODE_PERM_GROUP_W) != 0) {
                 // allowed
             } else {
                 print_string("Permission denied: only owner, group (with write), or admin can change permissions.", -1, video, cursor, COLOR_LIGHT_RED);
@@ -3466,8 +3526,11 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
                 perms = perms * 8 + (perm_str[i] - '0');
             }
         }
-        node_table[idx].permissions = perms;
-        fs_save();
+        inode.mode = (inode.mode & 0xF000) | perms;
+        if (disk_write_inode((uint32_t)inode_num, &inode) != 0) {
+            print_string("Permission update failed.", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
         print_string("Permissions updated.", -1, video, cursor, COLOR_LIGHT_GREEN);
         return;
     }
@@ -3488,8 +3551,9 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
         int fn = 0;
         while (cmd[start] && fn < MAX_NAME_LENGTH-1) filename[fn++] = cmd[start++];
         filename[fn] = 0;
-        int idx = resolve_path(filename);
-        if (idx == -1 || !node_table[idx].used) {
+        FInode inode;
+        int inode_num = path_resolve(filename, &inode);
+        if (inode_num < 0) {
             print_string("File not found.", -1, video, cursor, COLOR_LIGHT_RED);
             return;
         }
@@ -3506,8 +3570,11 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
             print_string("User not found.", -1, video, cursor, COLOR_LIGHT_RED);
             return;
         }
-        node_table[idx].owner_idx = owner_idx;
-        fs_save();
+        inode.uid = (uint16_t)owner_idx;
+        if (disk_write_inode((uint32_t)inode_num, &inode) != 0) {
+            print_string("Owner update failed.", -1, video, cursor, COLOR_LIGHT_RED);
+            return;
+        }
         print_string("Owner updated.", -1, video, cursor, COLOR_LIGHT_GREEN);
         return;
     }
@@ -3517,7 +3584,6 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
         extern User user_table[MAX_USERS];
         extern int user_count;
         extern void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cursor);
-        extern void fs_save();
         int target_idx = -1;
         if (current_user_idx < 0) {
             print_string("Not logged in.", -1, video, cursor, COLOR_LIGHT_RED);
@@ -3545,7 +3611,6 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
         shell_read_line("New password: ", new_password, MAX_NAME_LENGTH, video, cursor);
         str_copy(user_table[target_idx].username, new_username, MAX_NAME_LENGTH);
         hash_password(new_password, user_table[target_idx].password_hash);
-        fs_save();
         print_string("User updated.", -1, video, cursor, COLOR_LIGHT_GREEN);
         return;
     }
@@ -3597,8 +3662,6 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
         hash_password(password, user_table[user_count].password_hash);
         user_table[user_count].groups = GROUP_USERS; // Default group
         user_count++;
-        extern void fs_save();
-        fs_save();
         print_string("User added.", -1, video, cursor, COLOR_LIGHT_GREEN);
         return;
     }
@@ -3636,8 +3699,6 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
         // Shift users
         for (int i = idx; i < user_count-1; i++) user_table[i] = user_table[i+1];
         user_count--;
-        extern void fs_save();
-        fs_save();
         print_string("User deleted.", -1, video, cursor, COLOR_LIGHT_GREEN);
         return;
     }
@@ -3692,14 +3753,14 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
         int fn = 0;
         while (cmd[start] && fn < MAX_FILE_NAME-1) filename[fn++] = cmd[start++];
         filename[fn] = 0;
-        int idx = resolve_path(filename);
         extern int current_user_idx;
-        extern User user_table[MAX_USERS];
-        if (idx == -1 || !node_table[idx].used) {
+        FInode inode;
+        int inode_num = path_resolve(filename, &inode);
+        if (inode_num < 0) {
             print_string("File not found", -1, video, cursor, COLOR_LIGHT_RED);
             return;
         }
-        if (current_user_idx < 0 || (node_table[idx].owner_idx != current_user_idx && !IS_EFFECTIVE_ADMIN(current_user_idx))) {
+        if (current_user_idx < 0 || (inode.uid != (uint16_t)current_user_idx && !IS_EFFECTIVE_ADMIN(current_user_idx))) {
             print_string("Permission denied.", -1, video, cursor, COLOR_LIGHT_RED);
             return;
         }
@@ -4857,8 +4918,10 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
         handle_panic_command();
     } else if (mini_strcmp(cmd, "reboot") == 0) {
         handle_reboot_command();
-    } else if (mini_strcmp(cmd,"filesize")==0){
+    } else if (cmd[0] == 'f' && cmd[1] == 'i' && cmd[2] == 'l' && cmd[3] == 'e' && cmd[4] == 's' && cmd[5] == 'i' && cmd[6] == 'z' && cmd[7] == 'e' && cmd[8] == ' ') {
         handle_filesize_command(cmd + 9, video, cursor);
+    } else if (mini_strcmp(cmd,"filesize")==0){
+        print_string("Usage: filesize <path>", -1, video, cursor, COLOR_YELLOW);
     } else if (cmd[0] == 'g' && cmd[1] == 'r' && cmd[2] == 'e' && cmd[3] == 'p' && cmd[4] == ' ') {
         handle_grep_command(cmd + 5, video, cursor);
     } else if (cmd[0] == 'h' && cmd[1] == 'e' && cmd[2] == 'x' && cmd[3] == 'd' && cmd[4] == 'u' && cmd[5] == 'm' && cmd[6] == 'p') {
@@ -4923,29 +4986,31 @@ void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* v
     }
     
     // Also match files/directories in current directory
-    FSNode* dir = &node_table[current_dir_idx];
-    for (int i = 0; i < dir->child_count && tab_match_count < 32; i++) {
-        int child_idx = dir->children_idx[i];
-        FSNode* child = &node_table[child_idx];
-        
-        int match = 1;
-        for (int j = 0; j < partial_len; j++) {
-            if (child->name[j] != partial[j]) {
-                match = 0;
-                break;
-            }
-        }
-        
-        if (match) {
-            str_copy(tab_matches[tab_match_count], child->name, MAX_NAME_LENGTH);
-            if (child->type == NODE_DIRECTORY) {
-                int len = str_len(tab_matches[tab_match_count]);
-                if (len < MAX_NAME_LENGTH - 1) {
-                    tab_matches[tab_match_count][len] = '/';
-                    tab_matches[tab_match_count][len + 1] = 0;
+    {
+        DirectoryEntry entries[32];
+        int entry_count = newfs_readdir(newfs_cwd, entries, 32);
+        if (entry_count < 0) entry_count = 0;
+        for (int i = 0; i < entry_count && tab_match_count < 32; i++) {
+            int match = 1;
+            if (entries[i].name_len <= 0) continue;
+            for (int j = 0; j < partial_len && j < entries[i].name_len; j++) {
+                if (entries[i].name[j] != partial[j]) {
+                    match = 0;
+                    break;
                 }
             }
-            tab_match_count++;
+
+            if (match) {
+                str_copy(tab_matches[tab_match_count], entries[i].name, MAX_NAME_LENGTH);
+                if (entries[i].file_type == DIRENT_TYPE_DIR) {
+                    int len = str_len(tab_matches[tab_match_count]);
+                    if (len < MAX_NAME_LENGTH - 1) {
+                        tab_matches[tab_match_count][len] = '/';
+                        tab_matches[tab_match_count][len + 1] = 0;
+                    }
+                }
+                tab_match_count++;
+            }
         }
     }
     

@@ -46,10 +46,10 @@ else
 endif
 
 # Sources
-# NOTE: Phase 6 includes new block-based filesystem components alongside legacy compatibility
+# NOTE: Default runtime uses the new block-based filesystem only.
 C_SOURCES = \
 	kernel.c interrupts.c memory.c \
-	filesystem.c filesystem_disk.c filesystem_inode.c filesystem_vfs.c \
+	filesystem_disk.c filesystem_inode.c filesystem_fileio.c filesystem_vfs.c strings.c \
 	display.c calculator.c basic.c editor.c commands.c clipboard.c \
 	diskio.c ata.c process.c syscall.c protection.c \
 	elf_load.c \

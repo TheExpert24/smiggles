@@ -185,22 +185,14 @@ static void editor_sync_cursor_and_view(const char* buf, int len, char* video, i
 }
 
 // --- Global Variables ---
-// file_table and file_count removed; use node_table only
 
 // --- Nano-like Text Editor ---
 void nano_editor(const char* filename, char* video, int* cursor) {
-    int node_idx = resolve_path(filename);
-    if (node_idx == -1 || node_table[node_idx].type != NODE_FILE) {
-        // Create file if it doesn't exist
-        node_idx = fs_touch(filename, "");
-        if (node_idx < 0) {
+    int fd = fs_fd_open(filename, FS_O_READ);
+    if (fd < 0) {
+        fd = fs_fd_open(filename, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+        if (fd < 0) {
             print_string("Cannot create file", 18, video, cursor, 0xC);
-            return;
-        }
-        // Re-resolve node_idx after creation
-        node_idx = resolve_path(filename);
-        if (node_idx == -1 || node_table[node_idx].type != NODE_FILE) {
-            print_string("File error", 10, video, cursor, 0xC);
             return;
         }
     }
@@ -208,20 +200,36 @@ void nano_editor(const char* filename, char* video, int* cursor) {
     char prev_screen[80*25*2];
     for (int i = 0; i < 80*25*2; ++i) prev_screen[i] = video[i];
     int prev_cursor = *cursor;
-    int len = node_table[node_idx].content_size;
+    int len = 0;
+    int loaded = 0;
+    int read_len;
+    char file_buf[MAX_FILE_CONTENT];
+    fs_fd_close(fd);
+
+    fd = fs_fd_open(filename, FS_O_READ);
+    if (fd >= 0) {
+        read_len = fs_fd_read(fd, file_buf, (int)sizeof(file_buf) - 1);
+        fs_fd_close(fd);
+        if (read_len < 0) read_len = 0;
+        file_buf[read_len] = 0;
+        len = read_len;
+        loaded = 1;
+    }
+
+    if (!loaded) {
+        len = 0;
+        file_buf[0] = 0;
+    }
     if (len < 0 || len > MAX_FILE_CONTENT - 1) len = 0;
     int cursor_index = len;
     int editing = 1;
     int maxlen = MAX_FILE_CONTENT - 1;
     if (len > maxlen) {
         print_string("Error: file too long, not saved", -1, video, cursor, COLOR_RED);
-        // Remove the file
-        node_table[node_idx].used = 0;
-        fs_save();
         return;
     }
     for (int i = 0; i < len; i++) {
-        editor_work_buf[i] = node_table[node_idx].content[i];
+        editor_work_buf[i] = file_buf[i];
     }
     editor_work_buf[len] = 0;
     char* buf = editor_work_buf;
@@ -361,8 +369,6 @@ void nano_editor(const char* filename, char* video, int* cursor) {
             if (len < 0) len = 0;
             if (len > maxlen) {
                 print_string("Error: file too long, not saved", -1, video, cursor, COLOR_RED);
-                node_table[node_idx].used = 0;
-                fs_save();
                 while (1) {
                     unsigned char sc;
                     if (!keyboard_pop_scancode(&sc)) {
@@ -374,11 +380,21 @@ void nano_editor(const char* filename, char* video, int* cursor) {
                 break;
             }
             buf[len] = 0;
-            for (int i = 0; i <= len; i++) {
-                node_table[node_idx].content[i] = buf[i];
+            fd = fs_fd_open(filename, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+            if (fd < 0 || (len > 0 && fs_fd_write(fd, buf, len) != len)) {
+                if (fd >= 0) fs_fd_close(fd);
+                print_string("Save failed", -1, video, cursor, COLOR_RED);
+                while (1) {
+                    unsigned char sc;
+                    if (!keyboard_pop_scancode(&sc)) {
+                        continue;
+                    }
+                    if (sc == 0x9D) break;
+                }
+                exit_code = 2;
+                break;
             }
-            node_table[node_idx].content_size = len;
-            fs_save();
+            fs_fd_close(fd);
             while (1) {
                 unsigned char sc;
                 if (!keyboard_pop_scancode(&sc)) {

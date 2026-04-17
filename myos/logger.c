@@ -10,14 +10,31 @@ static int clamp_level(int level) {
     return level;
 }
 
-static int store_index(void) {
-    int idx = resolve_path(LOG_STORE_PATH);
-    if (idx < 0) {
-        idx = fs_touch(LOG_STORE_PATH, "");
+static int load_store(char* out, int max_len) {
+    int fd;
+    int len;
+
+    if (!out || max_len <= 0) return -1;
+    out[0] = 0;
+
+    fd = fs_fd_open(LOG_STORE_PATH, FS_O_READ);
+    if (fd < 0) return 0;
+    len = fs_fd_read(fd, out, max_len - 1);
+    fs_fd_close(fd);
+    if (len < 0) return -1;
+    out[len] = 0;
+    return len;
+}
+
+static int save_store(const char* data, int len) {
+    int fd = fs_fd_open(LOG_STORE_PATH, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+    if (fd < 0) return -1;
+    if (len > 0 && fs_fd_write(fd, data, len) != len) {
+        fs_fd_close(fd);
+        return -1;
     }
-    if (idx < 0 || idx >= MAX_NODES) return -1;
-    if (!node_table[idx].used || node_table[idx].type != NODE_FILE) return -1;
-    return idx;
+    fs_fd_close(fd);
+    return 0;
 }
 
 static int parse_uint(const char* s, int* cursor, int stop_char) {
@@ -94,18 +111,16 @@ const char* log_level_name(int level) {
 }
 
 void log_write(int level, const char* message) {
-    int idx;
     char line[LOGGER_MESSAGE_MAX + 40];
     char num[16];
+    char store[MAX_FILE_CONTENT];
     int line_len = 0;
     int size;
+    int store_len;
 
     level = clamp_level(level);
     logger_min_level = clamp_level(logger_min_level);
     if (level < logger_min_level) return;
-
-    idx = store_index();
-    if (idx < 0) return;
 
     line[0] = 0;
     int_to_str((int)ticks, num);
@@ -120,77 +135,77 @@ void log_write(int level, const char* message) {
 
     while (line[line_len]) line_len++;
 
-    size = node_table[idx].content_size;
+    store_len = load_store(store, (int)sizeof(store));
+    if (store_len < 0) return;
+    size = store_len;
     if (size < 0) size = 0;
     if (size > MAX_FILE_CONTENT - 1) size = MAX_FILE_CONTENT - 1;
-    node_table[idx].content[size] = 0;
+    store[size] = 0;
 
-    trim_oldest_lines(node_table[idx].content, &size, line_len);
+    trim_oldest_lines(store, &size, line_len);
 
     for (int i = 0; i < line_len && size < MAX_FILE_CONTENT - 1; i++) {
-        node_table[idx].content[size++] = line[i];
+        store[size++] = line[i];
     }
-    node_table[idx].content[size] = 0;
-    node_table[idx].content_size = size;
-    fs_save();
+    store[size] = 0;
+    save_store(store, size);
 }
 
 int log_count(void) {
-    int idx = store_index();
+    char store[MAX_FILE_CONTENT];
+    int store_len;
     int count = 0;
-    if (idx < 0) return 0;
-    for (int i = 0; i < node_table[idx].content_size; i++) {
-        if (node_table[idx].content[i] == '\n') count++;
+    store_len = load_store(store, (int)sizeof(store));
+    if (store_len < 0) return 0;
+    for (int i = 0; i < store_len; i++) {
+        if (store[i] == '\n') count++;
     }
     return count;
 }
 
 int log_get_entry(int oldest_index, LogEntry* out_entry) {
-    int idx;
+    char store[MAX_FILE_CONTENT];
+    int store_len;
     int current = 0;
     int i = 0;
     if (!out_entry) return 0;
     if (oldest_index < 0) return 0;
 
-    idx = store_index();
-    if (idx < 0) return 0;
+    store_len = load_store(store, (int)sizeof(store));
+    if (store_len < 0) return 0;
 
-    while (i < node_table[idx].content_size) {
+    while (i < store_len) {
         int line_start = i;
         int cursor;
         int tick_value;
         int level_value;
         int out_pos = 0;
 
-        while (i < node_table[idx].content_size && node_table[idx].content[i] != '\n') i++;
+        while (i < store_len && store[i] != '\n') i++;
 
         if (current == oldest_index) {
             cursor = line_start;
-            tick_value = parse_uint(node_table[idx].content, &cursor, '|');
-            level_value = parse_uint(node_table[idx].content, &cursor, '|');
+            tick_value = parse_uint(store, &cursor, '|');
+            level_value = parse_uint(store, &cursor, '|');
             if (tick_value < 0 || level_value < 0) return 0;
 
             out_entry->tick = (uint32_t)tick_value;
             out_entry->level = (uint8_t)clamp_level(level_value);
 
-            while (cursor < node_table[idx].content_size && node_table[idx].content[cursor] != '\n' && out_pos < LOGGER_MESSAGE_MAX - 1) {
-                out_entry->message[out_pos++] = node_table[idx].content[cursor++];
+            while (cursor < store_len && store[cursor] != '\n' && out_pos < LOGGER_MESSAGE_MAX - 1) {
+                out_entry->message[out_pos++] = store[cursor++];
             }
             out_entry->message[out_pos] = 0;
             return 1;
         }
 
         current++;
-        if (i < node_table[idx].content_size && node_table[idx].content[i] == '\n') i++;
+        if (i < store_len && store[i] == '\n') i++;
     }
 
     return 0;
 }
 
 void log_clear(void) {
-    int idx = store_index();
-    if (idx < 0) return;
-    node_table[idx].content[0] = 0;
-    node_table[idx].content_size = 0;
-    fs_save();
+    save_store("", 0);
 }
