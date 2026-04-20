@@ -697,9 +697,12 @@ int vfs_mount(const char* path, VFS_Operations* ops) {
 
 int vfs_open(const char* path, int flags) {
     if (!path) return -1;
+
+    char normalized[256];
+    if (!fs_path_normalize(path, normalized, (int)sizeof(normalized))) return -1;
     
     // Find the mount for this path
-    int mount_idx = vfs_find_mount(path);
+    int mount_idx = vfs_find_mount(normalized);
     if (mount_idx < 0) {
         return -2;  // No mount found
     }
@@ -711,7 +714,7 @@ int vfs_open(const char* path, int flags) {
     
     // Convert path to relative path for the mount
     char relative_path[256];
-    vfs_make_relative_path(path, mount->mount_point, relative_path);
+    vfs_make_relative_path(normalized, mount->mount_point, relative_path);
     
     int backend_fd = mount->ops->open(relative_path, flags);
     if (backend_fd < 0) return backend_fd;
@@ -789,7 +792,10 @@ static void vfs_fill_dirent(DirectoryEntry* de,
 int vfs_readdir(const char* path, DirectoryEntry* entries, int max_entries) {
     if (!path || !entries || max_entries <= 0) return -1;
 
-    if (my_strcmp(path, "/proc") == 0 || my_strcmp(path, "/proc/") == 0) {
+    char normalized[256];
+    if (!fs_path_normalize(path, normalized, (int)sizeof(normalized))) return -1;
+
+    if (my_strcmp(normalized, "/proc") == 0 || my_strcmp(normalized, "/proc/") == 0) {
         int n = 0;
         if (n < max_entries) vfs_fill_dirent(&entries[n++], 1, DIRENT_TYPE_FILE, "uptime", 6);
         if (n < max_entries) vfs_fill_dirent(&entries[n++], 2, DIRENT_TYPE_FILE, "ticks", 5);
@@ -797,7 +803,7 @@ int vfs_readdir(const char* path, DirectoryEntry* entries, int max_entries) {
         return n;
     }
 
-    if (my_strcmp(path, "/dev") == 0 || my_strcmp(path, "/dev/") == 0) {
+    if (my_strcmp(normalized, "/dev") == 0 || my_strcmp(normalized, "/dev/") == 0) {
         int n = 0;
         if (n < max_entries) vfs_fill_dirent(&entries[n++], 1, DIRENT_TYPE_FILE, "null", 4);
         if (n < max_entries) vfs_fill_dirent(&entries[n++], 2, DIRENT_TYPE_FILE, "zero", 4);
@@ -808,47 +814,56 @@ int vfs_readdir(const char* path, DirectoryEntry* entries, int max_entries) {
         return n;
     }
 
-    return newfs_readdir(path, entries, max_entries);
+    return newfs_readdir(normalized, entries, max_entries);
 }
 
 int vfs_mkdir(const char* path) {
     if (!path) return -1;
 
-    int mount_idx = vfs_find_mount(path);
+    char normalized[256];
+    if (!fs_path_normalize(path, normalized, (int)sizeof(normalized))) return -1;
+
+    int mount_idx = vfs_find_mount(normalized);
     if (mount_idx < 0) return -2;
 
     VFS_Mount* mount = &vfs_mounts[mount_idx];
     if (!mount->ops || !mount->ops->mkdir) return -3;
 
     char relative_path[256];
-    vfs_make_relative_path(path, mount->mount_point, relative_path);
+    vfs_make_relative_path(normalized, mount->mount_point, relative_path);
     return mount->ops->mkdir(relative_path);
 }
 
 int vfs_unlink(const char* path) {
     if (!path) return -1;
 
-    int mount_idx = vfs_find_mount(path);
+    char normalized[256];
+    if (!fs_path_normalize(path, normalized, (int)sizeof(normalized))) return -1;
+
+    int mount_idx = vfs_find_mount(normalized);
     if (mount_idx < 0) return -2;
 
     VFS_Mount* mount = &vfs_mounts[mount_idx];
     if (!mount->ops || !mount->ops->unlink) return -3;
 
     char relative_path[256];
-    vfs_make_relative_path(path, mount->mount_point, relative_path);
+    vfs_make_relative_path(normalized, mount->mount_point, relative_path);
     return mount->ops->unlink(relative_path);
 }
 
 int vfs_stat(const char* path, FInode* stat_out) {
     if (!path || !stat_out) return -1;
 
+    char normalized[256];
+    if (!fs_path_normalize(path, normalized, (int)sizeof(normalized))) return -1;
+
     for (int i = 0; i < (int)sizeof(FInode); i++) {
         ((char*)stat_out)[i] = 0;
     }
 
-    if (my_strcmp(path, "/") == 0 ||
-        my_strcmp(path, "/proc") == 0 || my_strcmp(path, "/proc/") == 0 ||
-        my_strcmp(path, "/dev") == 0 || my_strcmp(path, "/dev/") == 0) {
+    if (my_strcmp(normalized, "/") == 0 ||
+        my_strcmp(normalized, "/proc") == 0 || my_strcmp(normalized, "/proc/") == 0 ||
+        my_strcmp(normalized, "/dev") == 0 || my_strcmp(normalized, "/dev/") == 0) {
         stat_out->mode = INODE_MODE_DIR |
                          INODE_PERM_OWNER_R | INODE_PERM_OWNER_X |
                          INODE_PERM_GROUP_R | INODE_PERM_GROUP_X |
@@ -856,13 +871,13 @@ int vfs_stat(const char* path, FInode* stat_out) {
         return 0;
     }
 
-    if (my_strncmp(path, "/proc/", 6) == 0 || my_strncmp(path, "/dev/", 5) == 0) {
+    if (my_strncmp(normalized, "/proc/", 6) == 0 || my_strncmp(normalized, "/dev/", 5) == 0) {
         stat_out->mode = INODE_MODE_FILE |
                          INODE_PERM_OWNER_R | INODE_PERM_GROUP_R | INODE_PERM_OTHERS_R;
         return 0;
     }
 
-    return newfs_stat(path, stat_out);
+    return newfs_stat(normalized, stat_out);
 }
 
 void vfs_close_for_pid(int pid) {

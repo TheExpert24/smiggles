@@ -268,12 +268,17 @@ int path_resolve(const char* path, FInode* inode_out) {
     if (!path || !inode_out) {
         return -1;
     }
+
+    char normalized[256];
+    if (!fs_path_normalize(path, normalized, (int)sizeof(normalized))) {
+        return -1;
+    }
     
     // Start from root (inode 1 typically)
     uint32_t current_inode = 1;
     
     // Special case: root path
-    if (my_strcmp(path, "/") == 0) {
+    if (my_strcmp(normalized, "/") == 0) {
         if (disk_read_inode(current_inode, inode_out) != 0) {
             return -1;
         }
@@ -282,7 +287,7 @@ int path_resolve(const char* path, FInode* inode_out) {
     
     // Split path into components
     char* components[32];
-    int comp_count = path_split(path, components, 32);
+    int comp_count = path_split(normalized, components, 32);
     
     if (comp_count < 0) {
         return -1;
@@ -330,10 +335,15 @@ int path_resolve_parent(const char* path, char* name_out, FInode* parent_out) {
     if (!path || !name_out || !parent_out) {
         return -1;
     }
+
+    char normalized[256];
+    if (!fs_path_normalize(path, normalized, (int)sizeof(normalized))) {
+        return -1;
+    }
     
     // Find last slash
-    const char* last_slash = path;
-    const char* p = path;
+    const char* last_slash = normalized;
+    const char* p = normalized;
     while (*p) {
         if (*p == '/') {
             last_slash = p;
@@ -355,16 +365,16 @@ int path_resolve_parent(const char* path, char* name_out, FInode* parent_out) {
     
     // Resolve parent path
     char parent_path[256];
-    if (last_slash == path) {
+    if (last_slash == normalized) {
         // Parent is root
         parent_path[0] = '/';
         parent_path[1] = 0;
     } else {
-        int parent_len = last_slash - path;
+        int parent_len = last_slash - normalized;
         if (parent_len >= 256) {
             return -1;
         }
-        my_memcpy(parent_path, path, parent_len);
+        my_memcpy(parent_path, normalized, parent_len);
         parent_path[parent_len] = 0;
     }
     

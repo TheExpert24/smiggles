@@ -172,6 +172,7 @@ uint32_t inode_get_block(FInode* inode, uint32_t file_block_idx);
 int inode_set_block(FInode* inode, uint32_t file_block_idx, uint32_t block_num);
 
 // Path resolution
+int fs_path_normalize(const char* in_path, char* out_path, int out_max);
 int path_resolve(const char* path, FInode* inode_out);
 int path_resolve_parent(const char* path, char* name_out, FInode* parent_out);
 

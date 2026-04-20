@@ -304,6 +304,7 @@ void handle_login_command(char* video, int* cursor) {
 
 static int shell_read_file_content(const char* path, char* out, int max_len);
 static int shell_write_file_content(const char* path, const char* data, int len, int append);
+static int shell_resolve_required_path(const char* raw_path, char* out_path, const char* usage_msg, char* video, int* cursor);
 
 // --- Time Functions ---
 unsigned char cmos_read(unsigned char reg) {
@@ -2056,7 +2057,7 @@ static void handle_pkg_install_command(const char* args, char* video, int* curso
                 print_string(line, -1, video, cursor, COLOR_LIGHT_GRAY);
             }
 
-            goto pkg_install_transfer;
+            goto pkg_install_normalize_path;
         }
     }
 
@@ -2093,7 +2094,14 @@ static void handle_pkg_install_command(const char* args, char* video, int* curso
         }
     }
 
-pkg_install_transfer:
+pkg_install_normalize_path:
+    {
+        char resolved_install_path[MAX_PATH_LENGTH];
+        if (!shell_resolve_required_path(install_path, resolved_install_path, "PKG: invalid install path", video, cursor)) {
+            return;
+        }
+        str_copy(install_path, resolved_install_path, sizeof(install_path));
+    }
 
     for (int offset = 0; offset < MAX_FILE_CONTENT - 1;) {
         char request[128];
@@ -2316,7 +2324,13 @@ static void handle_pkg_remove_command(const char* args, char* video, int* cursor
         return;
     }
 
-    rm_result = vfs_unlink(install_path);
+    {
+        char resolved_install_path[MAX_PATH_LENGTH];
+        if (!shell_resolve_required_path(install_path, resolved_install_path, "PKG: invalid install path", video, cursor)) {
+            return;
+        }
+        rm_result = vfs_unlink(resolved_install_path);
+    }
     if (rm_result < 0) {
         print_string("PKG: failed to remove installed file", -1, video, cursor, COLOR_LIGHT_RED);
         return;
@@ -2587,6 +2601,7 @@ static void handle_syscalltest_command(char* video, int* cursor) {
 
 static void handle_fdtest_command(const char* arg, char* video, int* cursor) {
     char path[MAX_PATH_LENGTH];
+    char resolved[MAX_PATH_LENGTH];
     int path_len = 0;
 
     while (arg[path_len] == ' ') path_len++;
@@ -2608,12 +2623,16 @@ static void handle_fdtest_command(const char* arg, char* video, int* cursor) {
         return;
     }
 
+    if (!shell_resolve_required_path(path, resolved, "Usage: fdtest <path>", video, cursor)) {
+        return;
+    }
+
     const char* payload = "fdtest: syscall write/read OK";
     int payload_len = str_len(payload);
     char readback[64];
     for (int i = 0; i < (int)sizeof(readback); i++) readback[i] = 0;
 
-    int fdw = (int)syscall_invoke2(SYS_OPEN, (unsigned int)path, (unsigned int)(FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC));
+    int fdw = (int)syscall_invoke2(SYS_OPEN, (unsigned int)resolved, (unsigned int)(FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC));
     if (fdw < 0) {
         print_string("fdtest: open(write) failed", -1, video, cursor, COLOR_LIGHT_RED);
         return;
@@ -2626,7 +2645,7 @@ static void handle_fdtest_command(const char* arg, char* video, int* cursor) {
         return;
     }
 
-    int fdr = (int)syscall_invoke2(SYS_OPEN, (unsigned int)path, (unsigned int)FS_O_READ);
+    int fdr = (int)syscall_invoke2(SYS_OPEN, (unsigned int)resolved, (unsigned int)FS_O_READ);
     if (fdr < 0) {
         print_string("fdtest: open(read) failed", -1, video, cursor, COLOR_LIGHT_RED);
         return;
@@ -2706,6 +2725,16 @@ static void handle_pwd_command(char* video, int* cursor) {
 static int shell_prepare_create_path(const char* raw_name, char* out_path, int out_max) {
     (void)out_max;
     return shell_resolve_newfs_path(raw_name, out_path);
+}
+
+static int shell_resolve_required_path(const char* raw_path, char* out_path, const char* usage_msg, char* video, int* cursor) {
+    if (!shell_resolve_newfs_path(raw_path, out_path)) {
+        if (usage_msg && usage_msg[0]) {
+            print_string(usage_msg, -1, video, cursor, COLOR_LIGHT_RED);
+        }
+        return 0;
+    }
+    return 1;
 }
 
 static void handle_savedir_command(const char* args, char* video, int* cursor) {
@@ -3463,12 +3492,16 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
         }
         int start = 6;
         while (cmd[start] == ' ') start++;
-        char filename[MAX_NAME_LENGTH];
+        char filename[MAX_PATH_LENGTH];
+        char resolved[MAX_PATH_LENGTH];
         int fn = 0;
-        while (cmd[start] && fn < MAX_NAME_LENGTH-1) filename[fn++] = cmd[start++];
+        while (cmd[start] && fn < MAX_PATH_LENGTH - 1) filename[fn++] = cmd[start++];
         filename[fn] = 0;
+        if (!shell_resolve_required_path(filename, resolved, "Usage: chmod <filename>", video, cursor)) {
+            return;
+        }
         FInode inode;
-        int inode_num = path_resolve(filename, &inode);
+        int inode_num = path_resolve(resolved, &inode);
         if (inode_num < 0) {
             print_string("File not found.", -1, video, cursor, COLOR_LIGHT_RED);
             return;
@@ -3539,12 +3572,16 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
         }
         int start = 6;
         while (cmd[start] == ' ') start++;
-        char filename[MAX_NAME_LENGTH];
+        char filename[MAX_PATH_LENGTH];
+        char resolved[MAX_PATH_LENGTH];
         int fn = 0;
-        while (cmd[start] && fn < MAX_NAME_LENGTH-1) filename[fn++] = cmd[start++];
+        while (cmd[start] && fn < MAX_PATH_LENGTH - 1) filename[fn++] = cmd[start++];
         filename[fn] = 0;
+        if (!shell_resolve_required_path(filename, resolved, "Usage: chown <filename>", video, cursor)) {
+            return;
+        }
         FInode inode;
-        int inode_num = path_resolve(filename, &inode);
+        int inode_num = path_resolve(resolved, &inode);
         if (inode_num < 0) {
             print_string("File not found.", -1, video, cursor, COLOR_LIGHT_RED);
             return;
@@ -3741,13 +3778,17 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
     if (cmd[0] == 'e' && cmd[1] == 'd' && cmd[2] == 'i' && cmd[3] == 't' && cmd[4] == ' ') {
         int start = 5;
         while (cmd[start] == ' ') start++;
-        char filename[MAX_FILE_NAME];
+        char filename[MAX_PATH_LENGTH];
+        char resolved[MAX_PATH_LENGTH];
         int fn = 0;
-        while (cmd[start] && fn < MAX_FILE_NAME-1) filename[fn++] = cmd[start++];
+        while (cmd[start] && fn < MAX_PATH_LENGTH - 1) filename[fn++] = cmd[start++];
         filename[fn] = 0;
+        if (!shell_resolve_required_path(filename, resolved, "Usage: edit <file>", video, cursor)) {
+            return;
+        }
         extern int current_user_idx;
         FInode inode;
-        int inode_num = path_resolve(filename, &inode);
+        int inode_num = path_resolve(resolved, &inode);
         if (inode_num < 0) {
             print_string("File not found", -1, video, cursor, COLOR_LIGHT_RED);
             return;
@@ -3756,7 +3797,7 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
             print_string("Permission denied.", -1, video, cursor, COLOR_LIGHT_RED);
             return;
         }
-        nano_editor(filename, video, cursor);
+        nano_editor(resolved, video, cursor);
         return;
     }
     
@@ -4845,6 +4886,7 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
     } else if (cmd[0] == 'e' && cmd[1] == 'x' && cmd[2] == 'e' && cmd[3] == 'c' && cmd[4] == ' ') {
         int start = 5;
         char filename[MAX_PATH_LENGTH];
+        char resolved[MAX_PATH_LENGTH];
         int fi = 0;
 
         while (cmd[start] == ' ') start++;
@@ -4857,7 +4899,10 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
         if (filename[0] == 0) {
             print_string("Usage: exec <file.bas>", -1, video, cursor, COLOR_LIGHT_RED);
         } else {
-            basic_run_file(filename, video, cursor);
+            if (!shell_resolve_required_path(filename, resolved, "Usage: exec <file.bas>", video, cursor)) {
+                return;
+            }
+            basic_run_file(resolved, video, cursor);
         }
 
     } else if (is_math_expr(cmd)) {
