@@ -2599,6 +2599,27 @@ static void handle_syscalltest_command(char* video, int* cursor) {
     print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
 }
 
+static void handle_memtest_command(char* video, int* cursor) {
+    int result = memory_smoke_test();
+
+    if (result == 1) {
+        print_string("memtest: PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+        return;
+    }
+
+    if (result == -1) {
+        print_string("memtest: allocation failed", -1, video, cursor, COLOR_LIGHT_RED);
+    } else if (result == -2) {
+        print_string("memtest: first page was not zeroed", -1, video, cursor, COLOR_LIGHT_RED);
+    } else if (result == -3) {
+        print_string("memtest: second allocation failed", -1, video, cursor, COLOR_LIGHT_RED);
+    } else if (result == -4) {
+        print_string("memtest: freed page was not zeroed", -1, video, cursor, COLOR_LIGHT_RED);
+    } else {
+        print_string("memtest: unknown failure", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+}
+
 static void handle_fdtest_command(const char* arg, char* video, int* cursor) {
     char path[MAX_PATH_LENGTH];
     char resolved[MAX_PATH_LENGTH];
@@ -4873,7 +4894,7 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
             "log | log show [n] | log level [name|0-3] | log clear | log test\n"
             "dmesg - shortcut for log show 25\n"
             "basic | exec <file.bas>\n"
-            "fdtest <file> | spawn ring3\n"
+            "fdtest <file> | memtest | spawn ring3\n"
             "free | df | fscheck\n"
             "panic",
             -1, video, cursor, COLOR_LIGHT_GRAY);
@@ -4949,6 +4970,8 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
         handle_fdtest_command(cmd + 7, video, cursor);
     } else if (mini_strcmp(cmd, "syscalltest") == 0) {
         handle_syscalltest_command(video, cursor);
+    } else if (mini_strcmp(cmd, "memtest") == 0) {
+        handle_memtest_command(video, cursor);
     } else if (mini_strcmp(cmd, "halt") == 0) {
         handle_halt_command(video, cursor);
     } else if (mini_strcmp(cmd, "panic") == 0) {
@@ -4986,7 +5009,7 @@ void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* v
     const char* commands[] = {
         "ls", "cd", "pwd", "cat", "mkdir", "rmdir", "rm", "touch", "cp", "mv",
         "echo", "edit", "tree", "grep", "clear", "cls", "help", "time", "ping", "exec",
-        "udp", "tcp", "net", "sock", "udpecho", "pkg", "about", "ver", "panic", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "log", "dmesg", "filesize", "neofetch", "basic", "syscalltest", "fdtest", "spawn", "ps", "kill", "wait", "savedir"
+        "udp", "tcp", "net", "sock", "udpecho", "pkg", "about", "ver", "panic", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "log", "dmesg", "filesize", "neofetch", "basic", "syscalltest", "memtest", "fdtest", "spawn", "ps", "kill", "wait", "savedir"
     };
     int cmd_count = (int)(sizeof(commands) / sizeof(commands[0]));
     

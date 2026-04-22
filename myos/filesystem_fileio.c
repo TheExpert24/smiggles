@@ -54,6 +54,52 @@ static void my_memset(void* dest, int value, int n) {
     for (int i = 0; i < n; i++) d[i] = (unsigned char)value;
 }
 
+static void rollback_file_write(const FInode* original_inode,
+                                const unsigned char* original_indirect_buf,
+                                const FInode* updated_inode) {
+    unsigned char updated_indirect_buf[FS_BLOCK_SIZE];
+
+    if (!original_inode || !updated_inode) return;
+
+    for (int i = 0; i < 12; i++) {
+        if (original_inode->direct_blocks[i] == 0 && updated_inode->direct_blocks[i] != 0) {
+            disk_free_block(updated_inode->direct_blocks[i]);
+        }
+    }
+
+    if (updated_inode->indirect_block == 0) {
+        return;
+    }
+
+    if (disk_read_block(updated_inode->indirect_block, updated_indirect_buf) != 0) {
+        if (original_inode->indirect_block == 0) {
+            disk_free_block(updated_inode->indirect_block);
+        }
+        return;
+    }
+
+    if (original_inode->indirect_block == 0) {
+        uint32_t* updated_entries = (uint32_t*)updated_indirect_buf;
+        for (int i = 0; i < 1024; i++) {
+            if (updated_entries[i] != 0) {
+                disk_free_block(updated_entries[i]);
+            }
+        }
+        disk_free_block(updated_inode->indirect_block);
+        return;
+    }
+
+    if (original_inode->indirect_block == updated_inode->indirect_block && original_indirect_buf) {
+        const uint32_t* original_entries = (const uint32_t*)original_indirect_buf;
+        const uint32_t* updated_entries = (const uint32_t*)updated_indirect_buf;
+        for (int i = 0; i < 1024; i++) {
+            if (original_entries[i] == 0 && updated_entries[i] != 0) {
+                disk_free_block(updated_entries[i]);
+            }
+        }
+    }
+}
+
 // ============================================================================
 // File Descriptor Table
 // ============================================================================
@@ -274,6 +320,16 @@ int fs_fd_write(int fd, const char* buffer, int count) {
     if (disk_read_inode(fd_table[fd].inode_num, &inode) != 0) {
         return -4;
     }
+
+    FInode original_inode = inode;
+    unsigned char original_indirect_buf[FS_BLOCK_SIZE];
+    unsigned char has_original_indirect = 0;
+
+    if (original_inode.indirect_block != 0) {
+        if (disk_read_block(original_inode.indirect_block, original_indirect_buf) == 0) {
+            has_original_indirect = 1;
+        }
+    }
     
     uint32_t offset = fd_table[fd].offset;
     int bytes_written = 0;
@@ -291,6 +347,7 @@ int fs_fd_write(int fd, const char* buffer, int count) {
             // Need to allocate new block
             int allocated_block = disk_allocate_block();
             if (allocated_block < 0) {
+                rollback_file_write(&original_inode, has_original_indirect ? original_indirect_buf : 0, &inode);
                 return -5;  // Allocation failed
             }
             block_num = (uint32_t)allocated_block;
@@ -299,17 +356,20 @@ int fs_fd_write(int fd, const char* buffer, int count) {
             my_memset(block_buf, 0, 4096);
             if (disk_write_block(block_num, block_buf) != 0) {
                 disk_free_block(block_num);
+                rollback_file_write(&original_inode, has_original_indirect ? original_indirect_buf : 0, &inode);
                 return -6;
             }
             
             // Link to inode
             if (inode_set_block(&inode, file_block_idx, block_num) != 0) {
                 disk_free_block(block_num);
+                rollback_file_write(&original_inode, has_original_indirect ? original_indirect_buf : 0, &inode);
                 return -7;
             }
         } else {
             // Read existing block (may be partially filled)
             if (disk_read_block(block_num, block_buf) != 0) {
+                rollback_file_write(&original_inode, has_original_indirect ? original_indirect_buf : 0, &inode);
                 return -8;
             }
         }
@@ -322,6 +382,7 @@ int fs_fd_write(int fd, const char* buffer, int count) {
         my_memcpy(block_buf + block_offset, buffer + bytes_written, to_copy);
         
         if (disk_write_block(block_num, block_buf) != 0) {
+            rollback_file_write(&original_inode, has_original_indirect ? original_indirect_buf : 0, &inode);
             return -9;  // Write failed
         }
         
@@ -338,6 +399,7 @@ int fs_fd_write(int fd, const char* buffer, int count) {
     
     // Write inode back
     if (disk_write_inode(fd_table[fd].inode_num, &inode) != 0) {
+        rollback_file_write(&original_inode, has_original_indirect ? original_indirect_buf : 0, &inode);
         return -10;
     }
     

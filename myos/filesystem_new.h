@@ -87,6 +87,7 @@ typedef struct __attribute__((packed)) {
 #define INODE_PERM_OTHERS_X 0x0001  // Others execute
 
 // Directory entry: variable size, but typically 260 bytes to align nicely
+#define DIRENT_NAME_MAX 251
 typedef struct __attribute__((packed)) {
     uint32_t inode;              // Inode number
     uint16_t rec_len;            // Record length (256 typically)

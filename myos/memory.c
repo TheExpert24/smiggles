@@ -607,6 +607,7 @@ void* alloc_page(void) {
     bitmap_mark_range(frame, 1u, 1);
     frame_refcount[frame] = 1u;
     uint32_t phys = frame * PAGE_SIZE;
+    zero_page_u32((uint32_t*)(uintptr_t)phys);
     return (void*)phys;
 }
 
@@ -649,6 +650,39 @@ void free_pages(void* addr, unsigned int order) {
     bitmap_mark_range(frame, count, 0);
     for (uint32_t i = 0; i < count; i++) frame_refcount[frame + i] = 0u;
     buddy_free_block(rel, order);
+}
+
+int memory_smoke_test(void) {
+    unsigned char* first_page = (unsigned char*)alloc_page();
+    unsigned char* second_page = 0;
+
+    if (!first_page) return -1;
+
+    for (int i = 0; i < 64; i++) {
+        if (first_page[i] != 0) {
+            free_page(first_page);
+            return -2;
+        }
+    }
+
+    for (int i = 0; i < 64; i++) {
+        first_page[i] = 0xA5;
+    }
+
+    free_page(first_page);
+
+    second_page = (unsigned char*)alloc_page();
+    if (!second_page) return -3;
+
+    for (int i = 0; i < 64; i++) {
+        if (second_page[i] != 0) {
+            free_page(second_page);
+            return -4;
+        }
+    }
+
+    free_page(second_page);
+    return 1;
 }
 
 void* kmalloc(unsigned int size) {

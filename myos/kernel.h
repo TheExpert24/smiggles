@@ -347,6 +347,7 @@ void* alloc_page(void);
 void* alloc_pages(unsigned int order);
 void free_page(void* addr);
 void free_pages(void* addr, unsigned int order);
+int memory_smoke_test(void);
 void* kmalloc(unsigned int size);
 void kfree(void* ptr);
 unsigned int paging_get_kernel_directory(void);

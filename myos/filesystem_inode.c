@@ -46,6 +46,52 @@ static int my_strcmp(const char* a, const char* b) {
     return (unsigned char)*a - (unsigned char)*b;
 }
 
+static void rollback_directory_write(const FInode* original_inode,
+                                     const unsigned char* original_indirect_buf,
+                                     const FInode* updated_inode) {
+    unsigned char updated_indirect_buf[FS_BLOCK_SIZE];
+
+    if (!original_inode || !updated_inode) return;
+
+    for (int i = 0; i < 12; i++) {
+        if (original_inode->direct_blocks[i] == 0 && updated_inode->direct_blocks[i] != 0) {
+            disk_free_block(updated_inode->direct_blocks[i]);
+        }
+    }
+
+    if (updated_inode->indirect_block == 0) {
+        return;
+    }
+
+    if (disk_read_block(updated_inode->indirect_block, updated_indirect_buf) != 0) {
+        if (original_inode->indirect_block == 0) {
+            disk_free_block(updated_inode->indirect_block);
+        }
+        return;
+    }
+
+    if (original_inode->indirect_block == 0) {
+        uint32_t* updated_entries = (uint32_t*)updated_indirect_buf;
+        for (int i = 0; i < 1024; i++) {
+            if (updated_entries[i] != 0) {
+                disk_free_block(updated_entries[i]);
+            }
+        }
+        disk_free_block(updated_inode->indirect_block);
+        return;
+    }
+
+    if (original_inode->indirect_block == updated_inode->indirect_block && original_indirect_buf) {
+        const uint32_t* original_entries = (const uint32_t*)original_indirect_buf;
+        const uint32_t* updated_entries = (const uint32_t*)updated_indirect_buf;
+        for (int i = 0; i < 1024; i++) {
+            if (original_entries[i] == 0 && updated_entries[i] != 0) {
+                disk_free_block(updated_entries[i]);
+            }
+        }
+    }
+}
+
 // ============================================================================
 // Directory Operations
 // ============================================================================
@@ -104,6 +150,16 @@ int inode_write_directory(uint32_t inode_num, const DirectoryEntry* entries, int
     if (disk_read_inode(inode_num, &inode) != 0) {
         return -1;
     }
+
+    FInode original_inode = inode;
+    unsigned char original_indirect_buf[FS_BLOCK_SIZE];
+    unsigned char has_original_indirect = 0;
+
+    if (original_inode.indirect_block != 0) {
+        if (disk_read_block(original_inode.indirect_block, original_indirect_buf) == 0) {
+            has_original_indirect = 1;
+        }
+    }
     
     if (!(inode.mode & INODE_MODE_DIR)) {
         return -1;  // Not a directory
@@ -133,14 +189,20 @@ int inode_write_directory(uint32_t inode_num, const DirectoryEntry* entries, int
         int block_num = (int)inode_get_block(&inode, file_block_idx);
         if (block_num == 0 || block_num == -1) {
             block_num = disk_allocate_block();
-            if (block_num < 0) return -1;
+            if (block_num < 0) {
+                rollback_directory_write(&original_inode, has_original_indirect ? original_indirect_buf : 0, &inode);
+                return -1;
+            }
             
             if (inode_set_block(&inode, file_block_idx, (uint32_t)block_num) != 0) {
+                disk_free_block((uint32_t)block_num);
+                rollback_directory_write(&original_inode, has_original_indirect ? original_indirect_buf : 0, &inode);
                 return -1;
             }
         }
         
         if (disk_write_block((uint32_t)block_num, block_buf) != 0) {
+            rollback_directory_write(&original_inode, has_original_indirect ? original_indirect_buf : 0, &inode);
             return -1;
         }
         
@@ -149,6 +211,7 @@ int inode_write_directory(uint32_t inode_num, const DirectoryEntry* entries, int
     
     inode.size = bytes_written;
     if (disk_write_inode(inode_num, &inode) != 0) {
+        rollback_directory_write(&original_inode, has_original_indirect ? original_indirect_buf : 0, &inode);
         return -1;
     }
     
@@ -189,11 +252,17 @@ int inode_add_entry(uint32_t dir_inode_num, const char* name, uint32_t inode_num
     
     // Add new entry
     DirectoryEntry* new_entry = &entries[entry_count];
+    int name_len = my_strlen(name);
+
+    if (!name || name_len <= 0 || name_len > DIRENT_NAME_MAX) {
+        return -1;
+    }
+
     my_memset(new_entry, 0, sizeof(DirectoryEntry));
     new_entry->inode = inode_num;
     new_entry->file_type = file_type;
-    new_entry->name_len = my_strlen(name);
-    my_memcpy(new_entry->name, name, new_entry->name_len);
+    new_entry->name_len = (uint8_t)name_len;
+    my_memcpy(new_entry->name, name, name_len);
     
     // Write back
     return inode_write_directory(dir_inode_num, entries, entry_count + 1);
@@ -356,7 +425,7 @@ int path_resolve_parent(const char* path, char* name_out, FInode* parent_out) {
     if (*filename == '/') filename++;
     int name_len = my_strlen(filename);
     
-    if (name_len == 0 || name_len >= 256) {
+    if (name_len == 0 || name_len > DIRENT_NAME_MAX) {
         return -1;  // Invalid filename
     }
     
