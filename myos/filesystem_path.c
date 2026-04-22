@@ -26,8 +26,12 @@ int fs_path_normalize(const char* in_path, char* out_path, int out_max) {
 
         if (part_len == 2 && part[0] == '.' && part[1] == '.') {
             if (seg_count > 0) {
+                int popped_start = seg_starts[seg_count - 1];
                 seg_count--;
-                out_len = seg_starts[seg_count];
+                out_len = popped_start;
+                if (out_len > 1 && out_path[out_len - 1] == '/') {
+                    out_len--;
+                }
                 out_path[out_len] = 0;
                 if (out_len == 0) {
                     out_len = 1;

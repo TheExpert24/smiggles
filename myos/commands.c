@@ -2555,68 +2555,614 @@ static void handle_kill_command(const char* arg, char* video, int* cursor) {
 }
 
 static void handle_syscalltest_command(char* video, int* cursor) {
-    char buf[64];
-    char temp[16];
+    char summary[64];
+    char tmp[16];
+    int total = 0;
+    int passed = 0;
+    unsigned int before = syscall_invoke(SYS_GET_TICKS);
+    unsigned int pid = syscall_invoke(SYS_GET_PID);
+    unsigned int yield_ret = syscall_invoke(SYS_YIELD);
+    unsigned int after_yield = syscall_invoke(SYS_GET_TICKS);
+    unsigned int waited = syscall_invoke1(SYS_WAIT_TICKS, 2u);
+    unsigned int waited_zero = syscall_invoke1(SYS_WAIT_TICKS, 0u);
 
-    unsigned int before = syscall_invoke(1);
-    unsigned int pid = syscall_invoke(2);
-    unsigned int yield_ret = syscall_invoke(0);
-    unsigned int after = syscall_invoke(1);
-    unsigned int waited = syscall_invoke1(3, 2);
+    print_string("syscalltest: running checks...", -1, video, cursor, COLOR_LIGHT_GRAY);
 
-    buf[0] = 0;
-    str_concat(buf, "sys_get_ticks before: ");
-    int_to_str((int)before, temp);
-    str_concat(buf, temp);
-    print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
-
-    buf[0] = 0;
-    str_concat(buf, "sys_get_pid: ");
-    if (pid == 0xFFFFFFFFu) {
-        str_concat(buf, "none");
+    total++;
+    if (after_yield >= before) {
+        passed++;
+        print_string("syscalltest: get_ticks monotonic PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
     } else {
-        int_to_str((int)pid, temp);
-        str_concat(buf, temp);
+        print_string("syscalltest: get_ticks monotonic FAIL", -1, video, cursor, COLOR_LIGHT_RED);
     }
-    print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
 
-    buf[0] = 0;
-    str_concat(buf, "sys_yield return: ");
-    int_to_str((int)yield_ret, temp);
-    str_concat(buf, temp);
-    print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
+    total++;
+    if (pid == 0xFFFFFFFFu || pid < (unsigned int)MAX_PROCESSES) {
+        passed++;
+        print_string("syscalltest: get_pid return shape PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("syscalltest: get_pid return shape FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
 
-    buf[0] = 0;
-    str_concat(buf, "sys_get_ticks after: ");
-    int_to_str((int)after, temp);
-    str_concat(buf, temp);
-    print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
+    total++;
+    if (yield_ret == 0u) {
+        passed++;
+        print_string("syscalltest: yield return PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("syscalltest: yield return FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
 
-    buf[0] = 0;
-    str_concat(buf, "sys_wait_ticks(2) end: ");
-    int_to_str((int)waited, temp);
-    str_concat(buf, temp);
-    print_string(buf, -1, video, cursor, COLOR_LIGHT_GRAY);
+    total++;
+    if (waited >= before + 2u) {
+        passed++;
+        print_string("syscalltest: wait_ticks(2) delay PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("syscalltest: wait_ticks(2) delay FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (waited_zero >= waited) {
+        passed++;
+        print_string("syscalltest: wait_ticks(0) non-regress PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("syscalltest: wait_ticks(0) non-regress FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    summary[0] = 0;
+    str_concat(summary, "syscalltest: summary ");
+    int_to_str(passed, tmp);
+    str_concat(summary, tmp);
+    str_concat(summary, "/");
+    int_to_str(total, tmp);
+    str_concat(summary, tmp);
+    str_concat(summary, " checks passed");
+
+    if (passed == total) {
+        print_string(summary, -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string(summary, -1, video, cursor, COLOR_LIGHT_RED);
+    }
+}
+
+static void handle_nettest_command(char* video, int* cursor) {
+    char summary[64];
+    char tmp[16];
+    int total = 0;
+    int passed = 0;
+    Rtl8139Status nic;
+    UDPStats udp_stats;
+    TCPStats tcp_stats;
+    uint8_t local_ip[4];
+    int sock_fd = -1;
+    int poll_result = 0;
+    uint16_t udp_saved_port = 0;
+    uint16_t tcp_saved_port = 0;
+    int udp_had_listen = 0;
+    int tcp_had_listen = 0;
+
+    print_string("nettest: running checks...", -1, video, cursor, COLOR_LIGHT_GRAY);
+
+    total++;
+    if (rtl8139_get_status(&nic) && nic.present && nic.initialized) {
+        passed++;
+        print_string("nettest: rtl8139 initialized PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("nettest: rtl8139 initialized FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (arp_get_local_ip(local_ip)) {
+        passed++;
+        print_string("nettest: local IP configured PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("nettest: local IP configured FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (arp_get_cache_count() >= 0) {
+        passed++;
+        print_string("nettest: ARP cache query PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("nettest: ARP cache query FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (udp_get_stats(&udp_stats)) {
+        passed++;
+        print_string("nettest: UDP stats query PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("nettest: UDP stats query FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (tcp_get_stats(&tcp_stats)) {
+        passed++;
+        print_string("nettest: TCP stats query PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("nettest: TCP stats query FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    sock_fd = sock_open_udp();
+    if (sock_fd >= 0) {
+        passed++;
+        print_string("nettest: UDP socket open PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+        sock_close(sock_fd);
+        sock_fd = -1;
+    } else {
+        print_string("nettest: UDP socket open FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    poll_result = net_poll_once();
+    if (poll_result >= -500) {
+        passed++;
+        print_string("nettest: net dispatcher poll PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("nettest: net dispatcher poll FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    udp_had_listen = udp_get_listen_port(&udp_saved_port);
+    total++;
+    {
+        uint16_t check_port = 0;
+        if (udp_set_listen_port(40001u) && udp_get_listen_port(&check_port) && check_port == 40001u) {
+            passed++;
+            print_string("nettest: UDP listen set/show PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+        } else {
+            print_string("nettest: UDP listen set/show FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+        }
+    }
+    if (udp_had_listen) udp_set_listen_port(udp_saved_port);
+    else udp_clear_listen_port();
+
+    tcp_had_listen = tcp_get_listen_port(&tcp_saved_port);
+    total++;
+    {
+        uint16_t check_port = 0;
+        if (tcp_set_listen_port(40002u) && tcp_get_listen_port(&check_port) && check_port == 40002u) {
+            passed++;
+            print_string("nettest: TCP listen set/show PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+        } else {
+            print_string("nettest: TCP listen set/show FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+        }
+    }
+    if (tcp_had_listen) tcp_set_listen_port(tcp_saved_port);
+    else tcp_clear_listen_port();
+
+    summary[0] = 0;
+    str_concat(summary, "nettest: summary ");
+    int_to_str(passed, tmp);
+    str_concat(summary, tmp);
+    str_concat(summary, "/");
+    int_to_str(total, tmp);
+    str_concat(summary, tmp);
+    str_concat(summary, " checks passed");
+
+    if (passed == total) {
+        print_string(summary, -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string(summary, -1, video, cursor, COLOR_LIGHT_RED);
+    }
 }
 
 static void handle_memtest_command(char* video, int* cursor) {
-    int result = memory_smoke_test();
+    char summary[64];
+    char tmp[16];
+    int total = 0;
+    int passed = 0;
+    int smoke_result = memory_smoke_test();
+    unsigned char* user_code_page = 0;
+    unsigned char* user_stack_page = 0;
+    unsigned int test_pd = 0;
+    unsigned int phys = 0;
+    unsigned int flags = 0;
 
-    if (result == 1) {
-        print_string("memtest: PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
-        return;
+    print_string("memtest: running checks...", -1, video, cursor, COLOR_LIGHT_GRAY);
+
+    total++;
+    if (smoke_result == 1) {
+        passed++;
+        print_string("memtest: allocator zeroing/free-realloc PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("memtest: allocator zeroing/free-realloc FAIL", -1, video, cursor, COLOR_LIGHT_RED);
     }
 
-    if (result == -1) {
-        print_string("memtest: allocation failed", -1, video, cursor, COLOR_LIGHT_RED);
-    } else if (result == -2) {
-        print_string("memtest: first page was not zeroed", -1, video, cursor, COLOR_LIGHT_RED);
-    } else if (result == -3) {
-        print_string("memtest: second allocation failed", -1, video, cursor, COLOR_LIGHT_RED);
-    } else if (result == -4) {
-        print_string("memtest: freed page was not zeroed", -1, video, cursor, COLOR_LIGHT_RED);
+    user_code_page = (unsigned char*)alloc_page();
+    total++;
+    if (user_code_page) {
+        passed++;
+        print_string("memtest: allocate user code page PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
     } else {
-        print_string("memtest: unknown failure", -1, video, cursor, COLOR_LIGHT_RED);
+        print_string("memtest: allocate user code page FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    user_stack_page = (unsigned char*)alloc_page();
+    total++;
+    if (user_stack_page) {
+        passed++;
+        print_string("memtest: allocate user stack page PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("memtest: allocate user stack page FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (user_code_page && paging_get_page_ref((unsigned int)(uintptr_t)user_code_page) == 1u) {
+        passed++;
+        print_string("memtest: code page refcount initialized PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("memtest: code page refcount initialized FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (user_stack_page && paging_get_page_ref((unsigned int)(uintptr_t)user_stack_page) == 1u) {
+        passed++;
+        print_string("memtest: stack page refcount initialized PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("memtest: stack page refcount initialized FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    if (user_code_page && user_stack_page) {
+        test_pd = paging_create_process_directory((unsigned int)(uintptr_t)user_code_page,
+                                                  (unsigned int)(uintptr_t)user_stack_page,
+                                                  4096u);
+    }
+
+    total++;
+    if (test_pd != 0u) {
+        passed++;
+        print_string("memtest: create process page directory PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("memtest: create process page directory FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (test_pd != 0u && paging_get_mapping(test_pd,
+                                            (unsigned int)(uintptr_t)user_stack_page,
+                                            &phys,
+                                            &flags) == 0) {
+        passed++;
+        print_string("memtest: stack page mapping present PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("memtest: stack page mapping present FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (test_pd != 0u && (flags & PAGE_FLAG_USER) != 0u) {
+        passed++;
+        print_string("memtest: stack page user flag PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("memtest: stack page user flag FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (test_pd != 0u && paging_mark_user_range(test_pd,
+                                                (unsigned int)(uintptr_t)user_code_page,
+                                                0u) != 0) {
+        passed++;
+        print_string("memtest: reject zero-length user range PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("memtest: reject zero-length user range FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (test_pd != 0u && paging_set_page_writable(test_pd,
+                                                  (unsigned int)(uintptr_t)user_stack_page,
+                                                  0) == 0) {
+        passed++;
+        print_string("memtest: clear page writable bit PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("memtest: clear page writable bit FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (test_pd != 0u && paging_get_mapping(test_pd,
+                                            (unsigned int)(uintptr_t)user_stack_page,
+                                            &phys,
+                                            &flags) == 0 &&
+        (flags & PAGE_FLAG_RW) == 0u) {
+        passed++;
+        print_string("memtest: writable bit cleared verification PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("memtest: writable bit cleared verification FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (test_pd != 0u && paging_set_page_writable(test_pd,
+                                                  (unsigned int)(uintptr_t)user_stack_page,
+                                                  1) == 0) {
+        passed++;
+        print_string("memtest: restore page writable bit PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("memtest: restore page writable bit FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    if (test_pd != 0u) {
+        paging_destroy_process_directory(test_pd);
+    }
+    if (user_stack_page) {
+        free_page(user_stack_page);
+    }
+    if (user_code_page) {
+        free_page(user_code_page);
+    }
+
+    summary[0] = 0;
+    str_concat(summary, "memtest: summary ");
+    int_to_str(passed, tmp);
+    str_concat(summary, tmp);
+    str_concat(summary, "/");
+    int_to_str(total, tmp);
+    str_concat(summary, tmp);
+    str_concat(summary, " checks passed");
+
+    if (passed == total) {
+        print_string(summary, -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string(summary, -1, video, cursor, COLOR_LIGHT_RED);
+    }
+}
+
+static void handle_pathtest_command(char* video, int* cursor) {
+    char normalized[128];
+    char readback[64];
+    const char* payload = "pathtest: io ok";
+    const char* canonical_path = "/pathtest_file";
+    char summary[64];
+    char tmp[16];
+    int fd = -1;
+    int n = 0;
+    int total = 0;
+    int passed = 0;
+
+    print_string("pathtest: running checks...", -1, video, cursor, COLOR_LIGHT_GRAY);
+
+    total++;
+    if (fs_path_normalize("/a//b/./c/../d", normalized, (int)sizeof(normalized)) &&
+        mini_strcmp(normalized, "/a/b/d") == 0) {
+        passed++;
+        print_string("pathtest: normalize mixed separators/dots PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("pathtest: normalize mixed separators/dots FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (fs_path_normalize("/../../x", normalized, (int)sizeof(normalized)) &&
+        mini_strcmp(normalized, "/x") == 0) {
+        passed++;
+        print_string("pathtest: normalize parent-beyond-root PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("pathtest: normalize parent-beyond-root FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (fs_path_normalize("/", normalized, (int)sizeof(normalized)) &&
+        mini_strcmp(normalized, "/") == 0) {
+        passed++;
+        print_string("pathtest: normalize root PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("pathtest: normalize root FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    {
+        char too_many_segments[160];
+        int pos = 0;
+        for (int i = 0; i < 34 && pos < (int)sizeof(too_many_segments) - 2; i++) {
+            too_many_segments[pos++] = '/';
+            too_many_segments[pos++] = 'a';
+        }
+        too_many_segments[pos] = 0;
+
+        if (!fs_path_normalize(too_many_segments, normalized, (int)sizeof(normalized))) {
+            passed++;
+            print_string("pathtest: normalize segment-limit rejection PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+        } else {
+            print_string("pathtest: normalize segment-limit rejection FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+        }
+    }
+
+    (void)vfs_unlink(canonical_path);
+
+    total++;
+    fd = vfs_open("/./tmp/../pathtest_file", FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+    if (fd >= 0) {
+        passed++;
+        print_string("pathtest: open normalized path for write PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("pathtest: open normalized path for write FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (fd >= 0) {
+        n = vfs_write(fd, payload, str_len(payload));
+        if (n == str_len(payload)) {
+            passed++;
+            print_string("pathtest: write payload PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+        } else {
+            print_string("pathtest: write payload FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+        }
+        vfs_close(fd);
+        fd = -1;
+    } else {
+        print_string("pathtest: write payload FAIL (open step failed)", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    for (int i = 0; i < (int)sizeof(readback); i++) readback[i] = 0;
+
+    total++;
+    fd = vfs_open(canonical_path, FS_O_READ);
+    if (fd >= 0) {
+        passed++;
+        print_string("pathtest: reopen canonical path PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("pathtest: reopen canonical path FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (fd >= 0) {
+        n = vfs_read(fd, readback, (int)sizeof(readback) - 1);
+        if (n == str_len(payload)) {
+            passed++;
+            print_string("pathtest: read payload length PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+        } else {
+            print_string("pathtest: read payload length FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+        }
+        if (n >= 0 && n < (int)sizeof(readback)) readback[n] = 0;
+        vfs_close(fd);
+        fd = -1;
+    } else {
+        print_string("pathtest: read payload length FAIL (reopen step failed)", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (mini_strcmp(readback, payload) == 0) {
+        passed++;
+        print_string("pathtest: read payload content PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("pathtest: read payload content FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (vfs_unlink(canonical_path) == 0) {
+        passed++;
+        print_string("pathtest: unlink test file PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("pathtest: unlink test file FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    {
+        char long_path[305];
+        int len = DIRENT_NAME_MAX + 1;
+        long_path[0] = '/';
+        for (int i = 0; i < len; i++) {
+            long_path[i + 1] = 'a';
+        }
+        long_path[len + 1] = 0;
+
+        fd = vfs_open(long_path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+        if (fd < 0) {
+            passed++;
+            print_string("pathtest: overlong name rejection PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+        } else {
+            vfs_close(fd);
+            (void)vfs_unlink(long_path);
+            print_string("pathtest: overlong name rejection FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+        }
+    }
+
+    summary[0] = 0;
+    str_concat(summary, "pathtest: summary ");
+    int_to_str(passed, tmp);
+    str_concat(summary, tmp);
+    str_concat(summary, "/");
+    int_to_str(total, tmp);
+    str_concat(summary, tmp);
+    str_concat(summary, " checks passed");
+
+    if (passed == total) {
+        print_string(summary, -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string(summary, -1, video, cursor, COLOR_LIGHT_RED);
+    }
+}
+
+static void handle_proctest_command(char* video, int* cursor) {
+    char summary[64];
+    char tmp[16];
+    int total = 0;
+    int passed = 0;
+    int pid = -1;
+    unsigned int before_ticks = 0;
+    unsigned int after_ticks = 0;
+    unsigned int before_run_ticks = 0;
+    unsigned int after_run_ticks = 0;
+    int kill_result = -1;
+
+    print_string("proctest: running checks...", -1, video, cursor, COLOR_LIGHT_GRAY);
+
+    total++;
+    pid = process_spawn_demo_with_work(60u);
+    if (pid >= 0) {
+        passed++;
+        print_string("proctest: spawn demo process PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("proctest: spawn demo process FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (pid >= 0 && pid < MAX_PROCESSES &&
+        process_table[pid].state != PROC_UNUSED &&
+        process_table[pid].state != PROC_EXITED) {
+        passed++;
+        print_string("proctest: process visible in table PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("proctest: process visible in table FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (pid >= 0) {
+        before_run_ticks = process_table[pid].run_ticks;
+        before_ticks = syscall_invoke(1);
+        schedule();
+        (void)syscall_invoke1(3, 4u);
+        after_ticks = syscall_invoke(1);
+        after_run_ticks = process_table[pid].run_ticks;
+
+        if (after_ticks >= before_ticks &&
+            (after_run_ticks > before_run_ticks || process_table[pid].state == PROC_EXITED)) {
+            passed++;
+            print_string("proctest: scheduler/run tick progress PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+        } else {
+            print_string("proctest: scheduler/run tick progress FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+        }
+    } else {
+        print_string("proctest: scheduler/run tick progress FAIL (spawn step failed)", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (pid >= 0) {
+        kill_result = process_kill(pid);
+        if (kill_result == 0) {
+            passed++;
+            print_string("proctest: kill process PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+        } else {
+            print_string("proctest: kill process FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+        }
+    } else {
+        print_string("proctest: kill process FAIL (spawn step failed)", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (pid >= 0 && pid < MAX_PROCESSES && process_table[pid].state == PROC_EXITED) {
+        passed++;
+        print_string("proctest: process exit state recorded PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("proctest: process exit state recorded FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (process_kill(-1) == -1) {
+        passed++;
+        print_string("proctest: invalid pid rejection PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("proctest: invalid pid rejection FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    summary[0] = 0;
+    str_concat(summary, "proctest: summary ");
+    int_to_str(passed, tmp);
+    str_concat(summary, tmp);
+    str_concat(summary, "/");
+    int_to_str(total, tmp);
+    str_concat(summary, tmp);
+    str_concat(summary, " checks passed");
+
+    if (passed == total) {
+        print_string(summary, -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string(summary, -1, video, cursor, COLOR_LIGHT_RED);
     }
 }
 
@@ -4865,6 +5411,7 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
             "net pump <count> - poll network stack\n"
             "tcp listen <port>|off|show - TCP listener\n"
             "tcp stats - TCP counters\n"
+            "nettest - networking subsystem smoke checks\n"
             "sock open udp|bind|send|recv|close|list - UDP socket tools\n"
             "udpecho start|step|run|stop|status - UDP echo server",
             -1, video, cursor, COLOR_LIGHT_GRAY);
@@ -4894,7 +5441,8 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
             "log | log show [n] | log level [name|0-3] | log clear | log test\n"
             "dmesg - shortcut for log show 25\n"
             "basic | exec <file.bas>\n"
-            "fdtest <file> | memtest | spawn ring3\n"
+            "syscalltest | nettest\n"
+            "fdtest <file> | memtest | pathtest | proctest | spawn ring3\n"
             "free | df | fscheck\n"
             "panic",
             -1, video, cursor, COLOR_LIGHT_GRAY);
@@ -4970,8 +5518,14 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
         handle_fdtest_command(cmd + 7, video, cursor);
     } else if (mini_strcmp(cmd, "syscalltest") == 0) {
         handle_syscalltest_command(video, cursor);
+    } else if (mini_strcmp(cmd, "nettest") == 0) {
+        handle_nettest_command(video, cursor);
     } else if (mini_strcmp(cmd, "memtest") == 0) {
         handle_memtest_command(video, cursor);
+    } else if (mini_strcmp(cmd, "pathtest") == 0) {
+        handle_pathtest_command(video, cursor);
+    } else if (mini_strcmp(cmd, "proctest") == 0) {
+        handle_proctest_command(video, cursor);
     } else if (mini_strcmp(cmd, "halt") == 0) {
         handle_halt_command(video, cursor);
     } else if (mini_strcmp(cmd, "panic") == 0) {
@@ -5009,7 +5563,7 @@ void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* v
     const char* commands[] = {
         "ls", "cd", "pwd", "cat", "mkdir", "rmdir", "rm", "touch", "cp", "mv",
         "echo", "edit", "tree", "grep", "clear", "cls", "help", "time", "ping", "exec",
-        "udp", "tcp", "net", "sock", "udpecho", "pkg", "about", "ver", "panic", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "log", "dmesg", "filesize", "neofetch", "basic", "syscalltest", "memtest", "fdtest", "spawn", "ps", "kill", "wait", "savedir"
+        "udp", "tcp", "net", "sock", "udpecho", "pkg", "about", "ver", "panic", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "log", "dmesg", "filesize", "neofetch", "basic", "syscalltest", "nettest", "memtest", "pathtest", "proctest", "fdtest", "spawn", "ps", "kill", "wait", "savedir"
     };
     int cmd_count = (int)(sizeof(commands) / sizeof(commands[0]));
     
