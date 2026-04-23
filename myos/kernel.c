@@ -505,24 +505,61 @@ void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cur
 }
 
 void kernel_main(unsigned int mb_magic, unsigned int mb_info_addr) {
-        // Automatically log in as admin at boot
-        current_user_idx = 0;
+    char* video = (char*)0xB8000;
+    int cursor = 0;
+    int line_start = 0;
+    int boot_cursor = 0;
+    unsigned char prev_scancode = 0;
+    int e0_prefix_pending = 0;
+    int shift = 0;
+    int ctrl = 0;
+
+    for (int i = 0; i < 80*25*2; i += 2) {
+        video[i] = ' ';
+        video[i + 1] = 0x07;
+    }
+    // Hide hardware text cursor while boot status is shown.
+    asm volatile ("outb %0, %1" : : "a"((unsigned char)0x0A), "Nd"((unsigned short)0x3D4));
+    asm volatile ("outb %0, %1" : : "a"((unsigned char)0x20), "Nd"((unsigned short)0x3D5));
+
+    display_init(video);
+    boot_cursor = cursor;
+    print_string("Boot: setting active user...", -1, video, &boot_cursor, COLOR_LIGHT_GRAY);
+
+    // Automatically log in as admin at boot
+    current_user_idx = 0;
+
+    print_string("Boot: loading protection (GDT/TSS)...", -1, video, &boot_cursor, COLOR_LIGHT_GRAY);
     init_protection();
+
+    print_string("Boot: enabling paging and frame allocator...", -1, video, &boot_cursor, COLOR_LIGHT_GRAY);
     // Initialize basic paging and frame allocator (virtual memory foundation)
     init_paging(mb_magic, mb_info_addr);
+
+    print_string("Boot: initializing process table...", -1, video, &boot_cursor, COLOR_LIGHT_GRAY);
     init_process_table();
 
+    print_string("Boot: mounting filesystem runtime...", -1, video, &boot_cursor, COLOR_LIGHT_GRAY);
     // Ensure the new filesystem runtime is ready.
     if (!fs_runtime_ensure_newfs()) {
         kernel_panic("Filesystem initialization failed", "newfs bootstrap failed");
     }
+
+    print_string("Boot: validating filesystem state...", -1, video, &boot_cursor, COLOR_LIGHT_GRAY);
     fs_state_is_valid();
+
+    print_string("Boot: loading time settings...", -1, video, &boot_cursor, COLOR_LIGHT_GRAY);
     time_settings_load();
+
+    print_string("Boot: restoring active user...", -1, video, &boot_cursor, COLOR_LIGHT_GRAY);
     // keep admin as the active user after filesystem initialization
     current_user_idx = 0;
 
+    print_string("Boot: remapping PIC...", -1, video, &boot_cursor, COLOR_LIGHT_GRAY);
     // --- Interrupt setup ---
     pic_remap();
+
+    print_string("Boot: building IDT entries...", -1, video, &boot_cursor, COLOR_LIGHT_GRAY);
     for (int vector = 0; vector < 32; vector++) {
         set_idt_entry(vector, (unsigned int)exception_stub_table[vector]);
     }
@@ -537,27 +574,27 @@ void kernel_main(unsigned int mb_magic, unsigned int mb_info_addr) {
     extern struct IDT_entry idt[256];
     idt_ptr.limit = sizeof(idt) - 1;
     idt_ptr.base = (unsigned int)&idt;
-    load_idt(&idt_ptr);
-    mouse_init();
-    rtl8139_init();
-    char* video = (char*)0xB8000;
-    int cursor = 0;
-    int line_start = 0;
-    unsigned char prev_scancode = 0;
-    int e0_prefix_pending = 0;
-    int shift = 0;
-    int ctrl = 0;
 
-    
+    print_string("Boot: loading IDT...", -1, video, &boot_cursor, COLOR_LIGHT_CYAN);
+    load_idt(&idt_ptr);
+
+    print_string("Boot: initializing mouse...", -1, video, &boot_cursor, COLOR_LIGHT_CYAN);
+    mouse_init();
+
+    print_string("Boot: initializing network...", -1, video, &boot_cursor, COLOR_LIGHT_CYAN);
+    rtl8139_init();
+
+    print_string("Boot: preparing shell...", -1, video, &boot_cursor, COLOR_LIGHT_CYAN);
+
     for (int i = 0; i < 80*25*2; i += 2) {
         video[i] = ' ';
-        video[i+1] = 0x07;
+        video[i + 1] = 0x07;
     }
     display_init(video);
-
-    //introductory message
+    cursor = 0;
     print_smiggles_art(video, &cursor);
-    cursor += 80; // add one line space
+    cursor += 80;
+    line_start = cursor;
     const char* msg = "> ";
     int i = 0;
     while (msg[i]) {
@@ -614,7 +651,7 @@ void kernel_main(unsigned int mb_magic, unsigned int mb_info_addr) {
             display_restore_live_screen(video);
         }
 
-        //SHIFT/CTRL KEYS
+        // SHIFT/CTRL KEYS
         if (scancode == 0x2A || scancode == 0x36) { 
             shift = 1;
             display_refresh_mouse(video);
