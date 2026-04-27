@@ -626,6 +626,8 @@ void kernel_main(unsigned int mb_magic, unsigned int mb_info_addr) {
     asm volatile("sti");
 
     // Continue with normal kernel loop
+    unsigned int idle_refresh_counter = 0;
+    const unsigned int IDLE_REFRESH_PERIOD = 100000; // Tune as needed
     while (1) {
         MouseState mouse_state;
         unsigned char scancode;
@@ -640,9 +642,16 @@ void kernel_main(unsigned int mb_magic, unsigned int mb_info_addr) {
             display_set_mouse_position(mouse_state.col, mouse_state.row);
             display_sync_live_screen(video);
             display_refresh_mouse(video);
+            idle_refresh_counter = 0; // Reset counter on activity
         }
 
         if (!keyboard_pop_scancode(&scancode)) {
+            idle_refresh_counter++;
+            if (idle_refresh_counter >= IDLE_REFRESH_PERIOD) {
+                display_sync_live_screen(video);
+                display_refresh_mouse(video);
+                idle_refresh_counter = 0;
+            }
             continue;
         }
 
