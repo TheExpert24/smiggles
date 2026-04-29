@@ -1,3 +1,22 @@
+#include <stddef.h>
+
+// Helper: redraw shell prompt and command buffer
+static void redraw_shell_prompt_and_cmd(char* video, int line_start, const char* cmd_buf, int cmd_len) {
+    // Redraw prompt
+    const char* prompt = "> ";
+    int pi = 0;
+    int prompt_pos = line_start - 2; // prompt is always 2 chars
+    while (prompt[pi] && prompt_pos + pi < 80 * 25 - 1) {
+        video[(prompt_pos + pi) * 2] = prompt[pi];
+        video[(prompt_pos + pi) * 2 + 1] = 0x0F;
+        pi++;
+    }
+    // Redraw command buffer
+    for (int i = 0; i < cmd_len && (line_start + i) < 80 * 25; i++) {
+        video[(line_start + i) * 2] = cmd_buf[i];
+        video[(line_start + i) * 2 + 1] = 0x0F;
+    }
+}
 #include "kernel.h"
 
 extern int fs_runtime_ensure_newfs(void);
@@ -649,6 +668,7 @@ void kernel_main(unsigned int mb_magic, unsigned int mb_info_addr) {
             idle_refresh_counter++;
             if (idle_refresh_counter >= IDLE_REFRESH_PERIOD) {
                 display_sync_live_screen(video);
+                redraw_shell_prompt_and_cmd(video, line_start, cmd_buf, cmd_len);
                 display_refresh_mouse(video);
                 idle_refresh_counter = 0;
             }
