@@ -5522,6 +5522,24 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
                                 vptr[i] = prev_screen[i];
                             }
                             *cursor = prev_cursor;
+                            /* Move to end of the previous command line */
+                            while (*cursor < 80*25 && vptr[(*cursor)*2] != 0 && vptr[(*cursor)*2] != ' ' && vptr[(*cursor)*2] != '\0') (*cursor)++;
+                            /* Move to a new line for the status message */
+                            *cursor = ((*cursor / 80) + 1) * 80;
+                            if (*cursor >= 80*25) {
+                                scroll_screen(vptr);
+                                *cursor -= 80;
+                            }
+                            /* Print exit status */
+                            const char* msg = "[Exited]";
+                            unsigned char msg_color = 0x0C;
+                            int msg_len = 0;
+                            while (msg[msg_len]) msg_len++;
+                            for (int i = 0; i < msg_len && *cursor < 80*25 - 1; i++) {
+                                vptr[(*cursor)*2] = msg[i];
+                                vptr[(*cursor)*2 + 1] = msg_color;
+                                (*cursor)++;
+                            }
                             set_cursor_position(*cursor);
                             display_sync_live_screen(vptr);
                             vfs_close(fd);
@@ -5534,6 +5552,24 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
                 vptr[i] = prev_screen[i];
             }
             *cursor = prev_cursor;
+            /* Move to end of the previous command line */
+            while (*cursor < 80*25 && vptr[(*cursor)*2] != 0 && vptr[(*cursor)*2] != ' ' && vptr[(*cursor)*2] != '\0') (*cursor)++;
+            /* Move to a new line for the status message */
+            *cursor = ((*cursor / 80) + 1) * 80;
+            if (*cursor >= 80*25) {
+                scroll_screen(vptr);
+                *cursor -= 80;
+            }
+            /* Print exit status */
+            const char* msg = "[Exited]";
+            unsigned char msg_color = 0x0C;
+            int msg_len = 0;
+            while (msg[msg_len]) msg_len++;
+            for (int i = 0; i < msg_len && *cursor < 80*25 - 1; i++) {
+                vptr[(*cursor)*2] = msg[i];
+                vptr[(*cursor)*2 + 1] = msg_color;
+                (*cursor)++;
+            }
             set_cursor_position(*cursor);
             display_sync_live_screen(vptr);
             vfs_close(fd);
