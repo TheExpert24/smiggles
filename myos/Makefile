@@ -90,6 +90,9 @@ smiggles.iso: kernel.elf iso/boot/grub/grub.cfg
 	$(call check_tool,$(GRUB_MKRESCUE),grub-mkrescue / i686-elf-grub-mkrescue,GRUB_MKRESCUE)
 	mkdir -p iso/boot
 	cp kernel.elf iso/boot/kernel.elf
+	# Copy any converter-generated .bgf files from the tools directory into the ISO root
+	# (allows adding files without manually creating iso/ first)
+	@if [ -d ../tools ] ; then cp -f ../tools/*.bgf iso/ 2>/dev/null || true ; fi
 	$(GRUB_MKRESCUE) -o $@ iso >/dev/null
 
 # HDD image--explicit device/bus options kept for workflows that need them.
@@ -99,8 +102,12 @@ HDD_QEMU_OPTS ?= file=hdd.img,format=raw,if=ide,bus=0,unit=0
 hdd.img:
 	@if [ ! -f $@ ]; then qemu-img create -f raw $@ 10M; fi
 
+# Seed the GIF into the HDD filesystem image if it is already formatted.
+seed_bgf: hdd.img
+	@if [ -f ../tools/badapple.bgf ] ; then python ../tools/seed_badapple.py hdd.img ../tools/badapple.bgf ; fi
+
 # Run
-run: smiggles.iso hdd.img
+run: smiggles.iso hdd.img seed_bgf
 	$(call check_tool,$(QEMU),qemu-system-i386,QEMU)
 	"$(QEMU)" \
 		-drive file=smiggles.iso,media=cdrom,if=ide,bus=1,unit=0 \

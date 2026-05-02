@@ -5391,8 +5391,6 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
             "mkdir <dir> - create directory\n"
             "rm <path> - remove file\n"
             "mv <old> <new> - move or rename\n"
-            "echo \"text\" > <file> - write file\n"
-            "clear - clear screen\n"
             "time - show date/time\n"
             "whoami - current user\n"
             "login - log in\n"
@@ -5401,20 +5399,145 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
             "\n"
             "More: help net | help pkg | help admin | help dev",
             -1, video, cursor, COLOR_LIGHT_GRAY);
-    } else if (mini_strcmp(cmd, "help net") == 0) {
-        print_string(
-            "--- Networking ---\n"
-            "pciscan - detect RTL8139\n"
-            "arp setip <a.b.c.d> - set local IP\n"
-            "arp table - show ARP cache\n"
-            "ping <a.b.c.d> - ICMP echo\n"
-            "net pump <count> - poll network stack\n"
-            "tcp listen <port>|off|show - TCP listener\n"
-            "tcp stats - TCP counters\n"
-            "nettest - networking subsystem smoke checks\n"
-            "sock open udp|bind|send|recv|close|list - UDP socket tools\n"
-            "udpecho start|step|run|stop|status - UDP echo server",
-            -1, video, cursor, COLOR_LIGHT_GRAY);
+
+    } else if (cmd[0] == 'p' && cmd[1] == 'l' && cmd[2] == 'a' && cmd[3] == 'y' && cmd[4] == 'g' && cmd[5] == 'i' && cmd[6] == 'f' && (cmd[7] == ' ' || cmd[7] == 0)) {
+        int start = 7;
+        while (cmd[start] == ' ') start++;
+        if (cmd[start] == 0) {
+            print_string("Usage: playgif <path.bgf>", -1, video, cursor, COLOR_YELLOW);
+        } else {
+            char filename[MAX_PATH_LENGTH];
+            int fi = 0;
+            while (cmd[start] && fi < MAX_PATH_LENGTH - 1) filename[fi++] = cmd[start++];
+            filename[fi] = 0;
+            char resolved[MAX_PATH_LENGTH];
+            if (!shell_resolve_required_path(filename, resolved, "Usage: playgif <path>", video, cursor)) {
+                return;
+            }
+
+            int fd = vfs_open(resolved, FS_O_READ);
+            if (fd < 0) {
+                print_string("playgif: failed to open file", -1, video, cursor, COLOR_LIGHT_RED);
+                return;
+            }
+
+            unsigned char header[14];
+            int header_read = vfs_read(fd, (char*)header, (int)sizeof(header));
+            if (header_read != (int)sizeof(header) || header[0] != 'B' || header[1] != 'G' || header[2] != 'F' || header[3] != '1') {
+                vfs_close(fd);
+                print_string("playgif: invalid .bgf file", -1, video, cursor, COLOR_LIGHT_RED);
+                return;
+            }
+
+            int w = (int)header[4] | ((int)header[5] << 8);
+            int h = (int)header[6] | ((int)header[7] << 8);
+            int frames = (int)header[8] | ((int)header[9] << 8) | ((int)header[10] << 16) | ((int)header[11] << 24);
+            int delay = (int)header[12] | ((int)header[13] << 8);
+
+            if (w <= 0 || h <= 0 || frames <= 0) {
+                vfs_close(fd);
+                print_string("playgif: bad header", -1, video, cursor, COLOR_LIGHT_RED);
+                return;
+            }
+
+            int frame_bytes = ((w * h) + 7) / 8;
+            if (frame_bytes <= 0 || frame_bytes > 8192) {
+                vfs_close(fd);
+                print_string("playgif: unsupported frame size", -1, video, cursor, COLOR_LIGHT_RED);
+                return;
+            }
+
+            char* vptr = video;
+            char prev_screen[80 * 25 * 2];
+            int prev_cursor = *cursor;
+            for (int i = 0; i < 80 * 25 * 2; i++) {
+                prev_screen[i] = vptr[i];
+            }
+            /* Drain any pending/scattered keyboard scancodes so a leftover key
+               doesn't immediately abort playback on frame 1/2. */
+            {
+                unsigned char _sc = 0;
+                while (keyboard_pop_scancode(&_sc)) { }
+            }
+
+            unsigned char framebuf[8192];
+            const char quit_msg[] = "Ctrl+C to quit";
+            const int quit_msg_len = 14;
+            const int quit_msg_col = 65;
+            int ctrl_down = 0;
+
+            for (int f = 0; f < frames; f++) {
+                int frame_read = 0;
+                while (frame_read < frame_bytes) {
+                    int n = vfs_read(fd, (char*)framebuf + frame_read, frame_bytes - frame_read);
+                    if (n <= 0) {
+                        vfs_close(fd);
+                        print_string("playgif: truncated file", -1, video, cursor, COLOR_LIGHT_RED);
+                        return;
+                    }
+                    frame_read += n;
+                }
+
+                unsigned char* frame = framebuf;
+                for (int y = 0; y < h; y++) {
+                    for (int x = 0; x < w; x++) {
+                        int bit = y * w + x;
+                        unsigned char b = frame[bit >> 3];
+                        int v = (b >> (7 - (bit & 7))) & 1;
+                        int screen_x = x;
+                        int screen_y = y;
+                        if (screen_x < 0 || screen_x >= 80 || screen_y < 0 || screen_y >= 25) continue;
+                        int off = (screen_y * 80 + screen_x) * 2;
+                        vptr[off] = v ? (char)0xDB : ' ';
+                        vptr[off + 1] = v ? COLOR_WHITE : COLOR_BLACK;
+                    }
+                }
+
+                for (int i = 0; i < quit_msg_len; i++) {
+                    int cell = 24 * 80 + quit_msg_col + i;
+                    vptr[cell * 2] = quit_msg[i];
+                    vptr[cell * 2 + 1] = 0x4F;
+                }
+
+                display_sync_live_screen(vptr);
+
+                unsigned int wait_ticks = (unsigned int)((delay * 18 + 999) / 1000);
+                unsigned int wait_start = (unsigned int)ticks;
+                while (((unsigned int)ticks - wait_start) < wait_ticks) {
+                    unsigned char sc = 0;
+                    while (keyboard_pop_scancode(&sc)) {
+                        if (sc == 0x1D) {
+                            ctrl_down = 1;
+                            continue;
+                        }
+                        if (sc == 0x9D) {
+                            ctrl_down = 0;
+                            continue;
+                        }
+                        if (sc == 0xE0 || sc == 0x2A || sc == 0x36 || sc == 0xAA || sc == 0xB6) {
+                            continue;
+                        }
+                        if (ctrl_down && sc == 0x2E) {
+                            for (int i = 0; i < 80 * 25 * 2; i++) {
+                                vptr[i] = prev_screen[i];
+                            }
+                            *cursor = prev_cursor;
+                            set_cursor_position(*cursor);
+                            display_sync_live_screen(vptr);
+                            vfs_close(fd);
+                            return;
+                        }
+                    }
+                }
+            }
+            for (int i = 0; i < 80 * 25 * 2; i++) {
+                vptr[i] = prev_screen[i];
+            }
+            *cursor = prev_cursor;
+            set_cursor_position(*cursor);
+            display_sync_live_screen(vptr);
+            vfs_close(fd);
+        }
     } else if (mini_strcmp(cmd, "help pkg") == 0) {
         print_string(
             "--- Packages ---\n"
