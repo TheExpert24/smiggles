@@ -5423,9 +5423,16 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
 
             unsigned char header[14];
             int header_read = vfs_read(fd, (char*)header, (int)sizeof(header));
-            if (header_read != (int)sizeof(header) || header[0] != 'B' || header[1] != 'G' || header[2] != 'F' || header[3] != '1') {
+            if (header_read != (int)sizeof(header) || header[0] != 'B' || header[1] != 'G' || header[2] != 'F') {
                 vfs_close(fd);
                 print_string("playgif: invalid .bgf file", -1, video, cursor, COLOR_LIGHT_RED);
+                return;
+            }
+
+            int is_color = (header[3] == '4');  // BGF4 = color, BGF1 = monochrome
+            if (header[3] != '1' && header[3] != '4') {
+                vfs_close(fd);
+                print_string("playgif: unsupported format", -1, video, cursor, COLOR_LIGHT_RED);
                 return;
             }
 
@@ -5440,7 +5447,7 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
                 return;
             }
 
-            int frame_bytes = ((w * h) + 7) / 8;
+            int frame_bytes = is_color ? ((w * h) + 1) / 2 : ((w * h) + 7) / 8;
             if (frame_bytes <= 0 || frame_bytes > 8192) {
                 vfs_close(fd);
                 print_string("playgif: unsupported frame size", -1, video, cursor, COLOR_LIGHT_RED);
@@ -5479,17 +5486,41 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
                 }
 
                 unsigned char* frame = framebuf;
-                for (int y = 0; y < h; y++) {
-                    for (int x = 0; x < w; x++) {
-                        int bit = y * w + x;
-                        unsigned char b = frame[bit >> 3];
-                        int v = (b >> (7 - (bit & 7))) & 1;
-                        int screen_x = x;
-                        int screen_y = y;
-                        if (screen_x < 0 || screen_x >= 80 || screen_y < 0 || screen_y >= 25) continue;
-                        int off = (screen_y * 80 + screen_x) * 2;
-                        vptr[off] = v ? (char)0xDB : ' ';
-                        vptr[off + 1] = v ? COLOR_WHITE : COLOR_BLACK;
+                if (is_color) {
+                    /* BGF4: 4 bits per pixel, 2 pixels per byte */
+                    for (int y = 0; y < h; y++) {
+                        for (int x = 0; x < w; x++) {
+                            int pixel_idx = y * w + x;
+                            int byte_idx = pixel_idx / 2;
+                            unsigned char b = frame[byte_idx];
+                            unsigned char color;
+                            if (pixel_idx % 2 == 0) {
+                                color = (b >> 4) & 0x0F;  /* High nibble */
+                            } else {
+                                color = b & 0x0F;  /* Low nibble */
+                            }
+                            int screen_x = x;
+                            int screen_y = y;
+                            if (screen_x < 0 || screen_x >= 80 || screen_y < 0 || screen_y >= 25) continue;
+                            int off = (screen_y * 80 + screen_x) * 2;
+                            vptr[off] = (char)0xDB;
+                            vptr[off + 1] = color;
+                        }
+                    }
+                } else {
+                    /* BGF1: 1 bit per pixel, monochrome */
+                    for (int y = 0; y < h; y++) {
+                        for (int x = 0; x < w; x++) {
+                            int bit = y * w + x;
+                            unsigned char b = frame[bit >> 3];
+                            int v = (b >> (7 - (bit & 7))) & 1;
+                            int screen_x = x;
+                            int screen_y = y;
+                            if (screen_x < 0 || screen_x >= 80 || screen_y < 0 || screen_y >= 25) continue;
+                            int off = (screen_y * 80 + screen_x) * 2;
+                            vptr[off] = v ? (char)0xDB : ' ';
+                            vptr[off + 1] = v ? COLOR_WHITE : COLOR_BLACK;
+                        }
                     }
                 }
 

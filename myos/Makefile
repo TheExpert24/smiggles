@@ -102,9 +102,9 @@ HDD_QEMU_OPTS ?= file=hdd.img,format=raw,if=ide,bus=0,unit=0
 hdd.img:
 	@if [ ! -f $@ ]; then qemu-img create -f raw $@ 10M; fi
 
-# Seed the GIF into the HDD filesystem image if it is already formatted.
+# Seed all .bgf files from tools/ into the HDD filesystem image
 seed_bgf: hdd.img
-	@if [ -f ../tools/badapple.bgf ] ; then python ../tools/seed_badapple.py hdd.img ../tools/badapple.bgf ; fi
+	@cd ../tools && python seed_badapple.py ../myos/hdd.img
 
 # Run
 run: smiggles.iso hdd.img seed_bgf

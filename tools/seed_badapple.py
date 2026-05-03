@@ -245,20 +245,24 @@ def format_filesystem(f):
 
 
 def main(argv):
-    if len(argv) != 3:
-        print(f"usage: {Path(argv[0]).name} <hdd.img> <badapple.bgf>")
+    if len(argv) < 2:
+        print(f"usage: {Path(argv[0]).name} <hdd.img> [bgf_files...]")
         return 2
 
     img_path = Path(argv[1])
-    bgf_path = Path(argv[2])
     if not img_path.exists():
         print(f"error: missing image: {img_path}")
         return 1
-    if not bgf_path.exists():
-        print(f"error: missing bgf: {bgf_path}")
-        return 1
 
-    bgf = bgf_path.read_bytes()
+    # If specific files are provided, use those; otherwise find all .bgf files in current directory
+    if len(argv) > 2:
+        bgf_paths = [Path(arg) for arg in argv[2:]]
+    else:
+        bgf_paths = sorted(Path(".").glob("*.bgf"))
+    
+    if not bgf_paths:
+        print("no .bgf files found")
+        return 0
 
     with img_path.open("r+b") as f:
         sb = read_sector(f, FS_SUPERBLOCK_SECTOR)
@@ -282,7 +286,6 @@ def main(argv):
         root_inode = read_inode(f, root_inode_num)
 
         root_dir = read_dir_bytes(f, root_inode)
-        entries = []
         existing_names = set()
         for off in range(0, len(root_dir), DIRENT_SIZE):
             chunk = root_dir[off:off + DIRENT_SIZE]
@@ -292,28 +295,38 @@ def main(argv):
             name = name_bytes[:name_len].decode("utf-8", errors="ignore")
             if name:
                 existing_names.add(name)
-            entries.append((inode_num, rec_len, name_len, file_type, name_bytes))
 
-        if "badapple.bgf" in existing_names:
-            print("badapple.bgf already present in hdd.img")
-            return 0
+        # Seed each .bgf file
+        for bgf_path in bgf_paths:
+            if not bgf_path.exists():
+                print(f"warning: skipping missing file: {bgf_path}")
+                continue
+            
+            filename = bgf_path.name
+            if filename in existing_names:
+                print(f"  {filename} already present")
+                continue
+            
+            bgf = bgf_path.read_bytes()
 
-        # Allocate inode for the file.
-        new_inode_num = allocate_inode(inode_bitmap, counters)
-        new_inode = bytearray(256)
-        struct.pack_into("<H", new_inode, 0, INODE_MODE_FILE | INODE_PERM_OWNER_R | INODE_PERM_OWNER_W | INODE_PERM_GROUP_R | INODE_PERM_OTHERS_R)
-        struct.pack_into("<H", new_inode, 2, 0)
-        struct.pack_into("<I", new_inode, 4, len(bgf))
-        struct.pack_into("<H", new_inode, 24, 0)
-        struct.pack_into("<H", new_inode, 26, 1)
+            # Allocate inode for the file.
+            new_inode_num = allocate_inode(inode_bitmap, counters)
+            new_inode = bytearray(256)
+            struct.pack_into("<H", new_inode, 0, INODE_MODE_FILE | INODE_PERM_OWNER_R | INODE_PERM_OWNER_W | INODE_PERM_GROUP_R | INODE_PERM_OTHERS_R)
+            struct.pack_into("<H", new_inode, 2, 0)
+            struct.pack_into("<I", new_inode, 4, len(bgf))
+            struct.pack_into("<H", new_inode, 24, 0)
+            struct.pack_into("<H", new_inode, 26, 1)
 
-        write_file_bytes(f, new_inode, bgf, block_bitmap, counters)
-        write_inode(f, new_inode_num, new_inode)
+            write_file_bytes(f, new_inode, bgf, block_bitmap, counters)
+            write_inode(f, new_inode_num, new_inode)
 
-        # Append entry to root directory.
-        name = b"badapple.bgf"
-        entry = struct.pack(DIRECTORY_ENTRY_FMT, new_inode_num, DIRENT_SIZE, len(name), DIRENT_TYPE_FILE, name.ljust(252, b"\x00"))
-        root_dir += entry
+            # Append entry to root directory.
+            entry = struct.pack(DIRECTORY_ENTRY_FMT, new_inode_num, DIRENT_SIZE, len(filename), DIRENT_TYPE_FILE, filename.encode().ljust(252, b"\x00"))
+            root_dir += entry
+            existing_names.add(filename)
+            print(f"  seeded {filename}")
+
         struct.pack_into("<I", root_inode, 4, len(root_dir))
 
         # Reuse existing blocks for the root directory if possible.
@@ -329,10 +342,7 @@ def main(argv):
                 if i < 12:
                     struct.pack_into("<I", root_inode, 40 + i * 4, block_num)
                 else:
-                    # Root directory should never be this large in practice.
                     raise RuntimeError("root directory unexpectedly large")
-            else:
-                pass
             write_block(f, block_num, chunk)
 
         write_inode(f, root_inode_num, root_inode)
@@ -345,7 +355,7 @@ def main(argv):
         struct.pack_into("<I", sb, 28, counters[1])
         write_sector(f, FS_SUPERBLOCK_SECTOR, sb)
 
-    print(f"seeded {bgf_path.name} into {img_path}")
+    print(f"seeded {len(bgf_paths)} file(s) into {img_path}")
     return 0
 
 
