@@ -5396,6 +5396,7 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
             "login - log in\n"
             "reboot - restart\n"
             "halt - shutdown\n"
+            "playgif <bgf filename> - plays the gif\n"
             "\n"
             "More: help net | help pkg | help admin | help dev",
             -1, video, cursor, COLOR_LIGHT_GRAY);

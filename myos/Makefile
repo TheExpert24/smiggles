@@ -104,7 +104,7 @@ hdd.img:
 
 # Seed all .bgf files from tools/ into the HDD filesystem image
 seed_bgf: hdd.img
-	@cd ../tools && python seed_badapple.py ../myos/hdd.img
+	@cd ../tools && python3 seed_badapple.py ../myos/hdd.img
 
 # Run
 run: smiggles.iso hdd.img seed_bgf
