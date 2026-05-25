@@ -533,7 +533,37 @@ void kernel_main(unsigned int mb_magic, unsigned int mb_info_addr) {
     asm volatile ("outb %0, %1" : : "a"((unsigned char)0x20), "Nd"((unsigned short)0x3D5));
 
     display_init(video);
-    boot_cursor = cursor;
+    
+    // Show boot splash screen with animated dots
+    print_boot_splash(video);
+    
+    // Simple delay loop (counts iterations instead of relying on ticks)
+    // ~500 million iterations = ~5 seconds
+    for (int delay = 0; delay < 500000000; delay++) {
+        // Add animated dots
+        if (delay % 50000000 == 0 && delay > 0) {
+            int dot_count = (delay / 50000000) % 4;
+            for (int d = 0; d < dot_count; d++) {
+                int offset = (20 * 80 + 39 + 19 + d) * 2;
+                video[offset] = '.';
+                video[offset + 1] = COLOR_GREEN;
+            }
+            // Clear extra dots
+            for (int d = dot_count; d < 3; d++) {
+                int offset = (20 * 80 + 39 + 19 + d) * 2;
+                video[offset] = ' ';
+                video[offset + 1] = COLOR_BLACK;
+            }
+        }
+    }
+    
+    // Clear screen for boot messages
+    for (int i = 0; i < 80*25*2; i += 2) {
+        video[i] = ' ';
+        video[i + 1] = 0x07;
+    }
+    
+    boot_cursor = 0;
     print_string("Boot: setting active user...", -1, video, &boot_cursor, COLOR_LIGHT_GRAY);
 
     // Automatically log in as admin at boot

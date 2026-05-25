@@ -255,6 +255,80 @@ void print_smiggles_art(char* video, int* cursor) {
     *cursor = art_lines * 80;
 }
 
+void print_boot_splash(char* video) {
+    // Clear screen
+    for (int i = 0; i < 80*25*2; i += 2) {
+        video[i] = ' ';
+        video[i + 1] = COLOR_BLACK;
+    }
+    
+    // Snake logo (left side)
+    const char* snake_logo[12] = {
+        "",
+        "",
+        "           /^/^-\\",
+        "         _|__|  O|",
+        "\\/     /~     \\_/ \\",
+        " \\____|__________/  \\",
+        "        \\_______      \\",
+        "                `\\     \\",
+        "                  |     |",
+        "                 /      /",
+        "                /     /",
+        "              /      /"
+    };
+    
+    // Smiggles ASCII art (right side)
+    const char* smiggles_art[6] = {
+        "               _             _           ",
+        " ___ _ __ ___ (_) __ _  __ _| | ___  ___ ",
+        "/ __| '_ ` _ \\| |/ _` |/ _` | |/ _ \\/ __|",
+        "\\__ \\ | | | | | | (_| | (_| | |  __/\\__ \\",
+        "|___/_| |_| |_|_|\\__, |\\__, |_|\\___||___/",
+        "                 |___/ |___/             "
+    };
+    
+    // Center the combined artwork on screen
+    // Snake is ~20 chars wide, smiggles is ~42 chars wide, gap is ~4 chars
+    // Total: ~66 chars, centered on 80 char width = starting at column 7
+    int start_col = 6;
+    int start_row = 5;
+    
+    // Print snake logo (left part)
+    for (int l = 0; l < 12; l++) {
+        for (int j = 0; snake_logo[l][j] && j < 25; j++) {
+            int col = start_col + j;
+            if (col < 80) {
+                int offset = ((start_row - 1 + l) * 80 + col) * 2;
+                video[offset] = snake_logo[l][j];
+                video[offset + 1] = COLOR_GREEN;
+            }
+        }
+    }
+    
+    // Print smiggles art on right (with gap after snake)
+    int smiggles_start_col = start_col + 25 + 4;  // 25 for snake + 4 for gap
+    for (int l = 0; l < 6; l++) {
+        for (int j = 0; smiggles_art[l][j] && j < 42; j++) {
+            int col = smiggles_start_col + j;
+            if (col < 80) {
+                int offset = ((start_row + l) * 80 + col) * 2;
+                video[offset] = smiggles_art[l][j];
+                video[offset + 1] = COLOR_GREEN;
+            }
+        }
+    }
+    
+    // Print boot message at bottom
+    const char* boot_msg_base = "Booting Smiggles OS";
+    int msg_col = (80 - 19) / 2;  // Center the message
+    for (int j = 0; boot_msg_base[j] && j < 19; j++) {
+        int offset = (20 * 80 + msg_col + j) * 2;
+        video[offset] = boot_msg_base[j];
+        video[offset + 1] = COLOR_GREEN;
+    }
+}
+
 //print a string on NEW LINE with color
 void print_string(const char* str, int len, char* video, int* cursor, unsigned char color) {
     int computed_len = len;

@@ -475,6 +475,7 @@ void scroll_screen(char* video);
 void print_string(const char* str, int len, char* video, int* cursor, unsigned char color);
 void print_string_sameline(const char* str, int len, char* video, int* cursor, unsigned char color);
 void print_smiggles_art(char* video, int* cursor);
+void print_boot_splash(char* video);
 void set_cursor_position(int cursor);
 char scancode_to_char(unsigned char scancode, int shift);
 void display_init(char* video);
