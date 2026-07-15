@@ -196,6 +196,10 @@ const char* process_state_name(ProcessState state);
 int process_send_signal(int pid, int signal_number);
 void process_deliver_pending_signals(IRQContext* ctx);
 void process_record_irq_context(const IRQContext* ctx);
+void play_sound(uint32_t frequency);
+void nosound(void);
+void handle_beep_command(const char *args, void *video, void *cursor);
+
 
 // --- Interrupt Definitions ---
 #define PIC1_COMMAND 0x20

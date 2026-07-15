@@ -23,6 +23,41 @@ void read_line(char* buf, int max_len, char* video, int* cursor) {
     }
     buf[len] = 0;
 }
+void handle_beep_command(const char *args, void *video, void *cursor) {
+    (void)video;
+    (void)cursor;
+    
+    uint32_t freq = 440;
+    uint32_t duration = 200;
+    
+    if (args && *args != 0) {
+        uint32_t f_val = 0;
+        while (*args == ' ') args++;
+        while (*args >= '0' && *args <= '9') {
+            f_val = f_val * 10 + (*args - '0');
+            args++;
+        }
+        if (f_val > 0) freq = f_val;
+        
+        uint32_t d_val = 0;
+        while (*args == ' ') args++;
+        while (*args >= '0' && *args <= '9') {
+            d_val = d_val * 10 + (*args - '0');
+            args++;
+        }
+        if (d_val > 0) duration = d_val;
+    }
+    
+    play_sound(freq);
+    
+    volatile uint32_t delay_counter = duration * 800000;
+    while (delay_counter > 0) {
+        delay_counter--;
+    }
+    
+    nosound();
+}
+
 
 extern int fs_runtime_ensure_newfs(void);
 extern int path_resolve(const char* path, FInode* inode_out);
@@ -4372,6 +4407,10 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
     
     if (mini_strcmp(cmd, "pwd") == 0) {
         handle_pwd_command(video, cursor);
+    } else if (mini_strcmp(cmd, "beep") == 0) {
+        handle_beep_command("", video, cursor);
+    } else if (cmd[0] == 'b' && cmd[1] == 'e' && cmd[2] == 'e' && cmd[3] == 'p' && cmd[4] == ' ') {
+        handle_beep_command(cmd + 5, video, cursor);
     } else if (mini_strcmp(cmd, "savedir") == 0) {
         handle_savedir_command("", video, cursor);
     } else if (cmd[0] == 's' && cmd[1] == 'a' && cmd[2] == 'v' && cmd[3] == 'e' && cmd[4] == 'd' && cmd[5] == 'i' && cmd[6] == 'r' && cmd[7] == ' ') {
@@ -5397,6 +5436,7 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
             "reboot - restart\n"
             "halt - shutdown\n"
             "playgif <bgf filename> - plays the gif\n"
+            "beep <frequency number> - plays a sound\n"
             "\n"
             "More: help net | help pkg | help admin | help dev",
             -1, video, cursor, COLOR_LIGHT_GRAY);
