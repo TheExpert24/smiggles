@@ -5625,6 +5625,20 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
             "chown <file>\n"
             "tz show|set <zone>",
             -1, video, cursor, COLOR_LIGHT_GRAY);
+    } else if (mini_strcmp(cmd, "help net") == 0) {
+        print_string(
+            "--- Networking ---\n"
+            "pciscan - detect RTL8139\n"
+            "arp setip <a.b.c.d> - set local IP\n"
+            "arp table - show ARP cache\n"
+            "ping <a.b.c.d> - ICMP echo\n"
+            "net pump <count> - poll network stack\n"
+            "tcp listen <port>|off|show - TCP listener\n"
+            "tcp stats - TCP counters\n"
+            "nettest - networking subsystem smoke checks\n"
+            "sock open udp|bind|send|recv|close|list - UDP socket tools\n"
+            "udpecho start|step|run|stop|status - UDP echo server",
+            -1, video, cursor, COLOR_LIGHT_GRAY);
     } else if (mini_strcmp(cmd, "help dev") == 0) {
         print_string(
             "--- Dev/Debug ---\n"
