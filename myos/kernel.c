@@ -630,6 +630,10 @@ void kernel_main(unsigned int mb_magic, unsigned int mb_info_addr) {
     extern struct IDT_entry idt[256];
     idt_ptr.limit = sizeof(idt) - 1;
     idt_ptr.base = (unsigned int)&idt;
+    extern void ac97_init(void);
+    extern int vfs_mount_audio_device(void);
+    ac97_init();            
+    vfs_mount_audio_device();   
 
     print_string("Boot: loading IDT...", -1, video, &boot_cursor, COLOR_LIGHT_CYAN);
     load_idt(&idt_ptr);

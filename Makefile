@@ -13,6 +13,7 @@ all:
 run:
 	$(MAKE) -C $(SUBDIR) all
 	$(MAKE) -C $(SUBDIR) seed_bgf
+	@cd tools && python3 seed_music.py ../$(SUBDIR)/hdd.img
 	@"$(QEMU)" \
 		-drive file=$(SUBDIR)/smiggles.iso,media=cdrom,if=ide,bus=1,unit=0 \
 		-drive file=$(SUBDIR)/hdd.img,format=raw,if=ide,bus=0,unit=0 \
@@ -24,3 +25,4 @@ run:
 		-machine pcspk-audiodev=snd0
 clean:
 	$(MAKE) -C $(SUBDIR) clean
+	

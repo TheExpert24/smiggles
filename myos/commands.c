@@ -1,15 +1,15 @@
 #include "kernel.h"
 #include <stddef.h>
-// Declare read_line function
+
+int fs_runtime_ensure_newfs(void);
+
 void read_line(char* buf, int max_len, char* video, int* cursor);
-// Declare get_key function
 char get_key(void);
 
-// Simple read_line implementation for login
 void read_line(char* buf, int max_len, char* video, int* cursor) {
     int len = 0;
     while (len < max_len - 1) {
-        char c = get_key(); // You may need to replace get_key with your actual key reading function
+        char c = get_key();
         if (c == '\n' || c == '\r') break;
         if (c == '\b' && len > 0) {
             len--;
@@ -23,13 +23,12 @@ void read_line(char* buf, int max_len, char* video, int* cursor) {
     }
     buf[len] = 0;
 }
+
 void handle_beep_command(const char *args, void *video, void *cursor) {
     (void)video;
     (void)cursor;
-    
     uint32_t freq = 440;
     uint32_t duration = 200;
-    
     if (args && *args != 0) {
         uint32_t f_val = 0;
         while (*args == ' ') args++;
@@ -38,7 +37,6 @@ void handle_beep_command(const char *args, void *video, void *cursor) {
             args++;
         }
         if (f_val > 0) freq = f_val;
-        
         uint32_t d_val = 0;
         while (*args == ' ') args++;
         while (*args >= '0' && *args <= '9') {
@@ -47,22 +45,42 @@ void handle_beep_command(const char *args, void *video, void *cursor) {
         }
         if (d_val > 0) duration = d_val;
     }
-    
     play_sound(freq);
-    
     volatile uint32_t delay_counter = duration * 800000;
     while (delay_counter > 0) {
         delay_counter--;
     }
-    
     nosound();
 }
+void command_test_sound(void *video, void *cursor) {
+    int fd = vfs_open("/dev/sound", 0);
+    if (fd < 0) {
+        print_string("Sound test failed: Cannot open /dev/sound\n", 41, video, cursor, COLOR_LIGHT_RED);
+        return;
+    }
 
+    static char tone_buf[4096];
+    int phase = 0;
 
-extern int fs_runtime_ensure_newfs(void);
-extern int path_resolve(const char* path, FInode* inode_out);
-extern int disk_write_inode(uint32_t inode_num, const FInode* inode);
+    for (int i = 0; i < 4096; i += 4) {
+        short sample = (phase < 22) ? 10000 : -10000;
+        
+        tone_buf[i]     = sample & 0xFF;
+        tone_buf[i + 1] = (sample >> 8) & 0xFF;
+        tone_buf[i + 2] = sample & 0xFF;
+        tone_buf[i + 3] = (sample >> 8) & 0xFF;
+        
+        phase = (phase + 1) % 44;
+    }
 
+    print_string("Streaming a 1kHz tone to /dev/sound...\n", 39, video, cursor, COLOR_LIGHT_GREEN);
+
+    for (int loop = 0; loop < 1500; loop++) {
+        vfs_write(fd, tone_buf, 4096);
+    }
+
+    print_string("Tone streaming finished.\n", 25, video, cursor, COLOR_LIGHT_GREEN);
+}
 static char newfs_cwd[MAX_PATH_LENGTH] = "/";
 
 static void shell_ensure_newfs_cwd(void) {
@@ -4419,6 +4437,8 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
         handle_cd_command(cmd + 3, video, cursor, 0x0B);
     } else if (cmd[0] == 'c' && cmd[1] == 'd' && cmd[2] == 0) {
         handle_cd_command("", video, cursor, 0x0B);
+    }else if (cmd[0]=='t'&& cmd[1]=='e'&& cmd[2]=='s'&& cmd[3]=='t'&& cmd[4]=='_'&& cmd[5]=='s'&& cmd[6]=='o'&& cmd[7]=='u'&& cmd[8]=='n'&& cmd[9]=='d') {
+        command_test_sound(video,cursor);
     } else if (mini_strcmp(cmd, "ls") == 0) {
         handle_ls_command(video, cursor, 0x0B);
     } else if (cmd[0] == 'f' && cmd[1] == 'i' && cmd[2] == 'l' && cmd[3] == 'e' && cmd[4] == 's' && cmd[5] == 'i' && cmd[6] == 'z' && cmd[7] == 'e' && cmd[8] == ' ') {
