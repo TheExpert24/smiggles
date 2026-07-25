@@ -81,6 +81,39 @@ void command_test_sound(void *video, void *cursor) {
 
     print_string("Tone streaming finished.\n", 25, video, cursor, COLOR_LIGHT_GREEN);
 }
+extern void play_wav_file_resolved(const char* resolved_path);
+
+void command_play(const char* args, void* video, void* cursor) {
+    char* vid = (char*)video;
+    int* cur = (int*)cursor;
+
+    if (!args || *args == '\0') {
+        print_string("Usage: play <filename>\n", 23, vid, cur, COLOR_LIGHT_RED);
+        return;
+    }
+
+    while (*args == ' ') {
+        args++;
+    }
+
+    static char clean_name[128];
+    int idx = 0;
+    while (args[idx] != '\0' && args[idx] != ' ' && args[idx] != '\n' && args[idx] != '\r' && idx < 127) {
+        clean_name[idx] = args[idx];
+        idx++;
+    }
+    clean_name[idx] = '\0';
+
+    if (idx == 0) {
+        print_string("Error: No filename provided.\n", 29, vid, cur, COLOR_LIGHT_RED);
+        return;
+    }
+
+    print_string("Streaming audio file via VFS...\n", 32, vid, cur, COLOR_LIGHT_GREEN);
+    play_wav_file_resolved(clean_name);
+    print_string("Playback operation finished.\n", 29, vid, cur, COLOR_LIGHT_GREEN);
+}
+
 static char newfs_cwd[MAX_PATH_LENGTH] = "/";
 
 static void shell_ensure_newfs_cwd(void) {
@@ -4439,6 +4472,9 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
         handle_cd_command("", video, cursor, 0x0B);
     }else if (cmd[0]=='t'&& cmd[1]=='e'&& cmd[2]=='s'&& cmd[3]=='t'&& cmd[4]=='_'&& cmd[5]=='s'&& cmd[6]=='o'&& cmd[7]=='u'&& cmd[8]=='n'&& cmd[9]=='d') {
         command_test_sound(video,cursor);
+    } else if (cmd[0] == 'p' && cmd[1] == 'l' && cmd[2] == 'a' && cmd[3] == 'y') {
+        const char* args = cmd + 5;
+        command_play(args, video, cursor);
     } else if (mini_strcmp(cmd, "ls") == 0) {
         handle_ls_command(video, cursor, 0x0B);
     } else if (cmd[0] == 'f' && cmd[1] == 'i' && cmd[2] == 'l' && cmd[3] == 'e' && cmd[4] == 's' && cmd[5] == 'i' && cmd[6] == 'z' && cmd[7] == 'e' && cmd[8] == ' ') {

@@ -21,7 +21,8 @@ run:
 		-serial stdio \
 		-net nic,model=rtl8139 \
 		-net user \
-		-audiodev $(AUDIODEV),id=snd0 \
+		-audiodev coreaudio,id=snd0 \
+		-device sb16,audiodev=snd0 \
 		-machine pcspk-audiodev=snd0
 clean:
 	$(MAKE) -C $(SUBDIR) clean
