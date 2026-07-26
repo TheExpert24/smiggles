@@ -13,37 +13,38 @@ static void sb16_write_dsp(uint8_t val) {
     outb(SB_DSP_WRITE, val);
 }
 
-static void isa_dma_setup_channel1(uint32_t buffer_phys, uint32_t length) {
-    uint32_t count = length - 1;
-    outb(0x0A, 0x04 | 1); // Mask Channel 1
-    outb(0x0C, 0x00);     // Clear flip-flop
-    outb(0x0B, 0x48 | 0x10 | 0x00 | 1); // Auto-Init Single Mode
-
-    outb(0x02, buffer_phys & 0xFF);
-    outb(0x02, (buffer_phys >> 8) & 0xFF);
-    outb(0x83, (buffer_phys >> 16) & 0xFF);
-
-    outb(0x03, count & 0xFF);
-    outb(0x03, (count >> 8) & 0xFF);
-    outb(0x0A, 0x00 | 1); // Unmask Channel 1
+static void isa_dma_setup_channel5(uint32_t buffer_phys, uint32_t length) {
+    uint32_t words = length / 2;
+    uint32_t count = words - 1;
+    outb(0xD4, 0x04 | 1);
+    outb(0xD8, 0x00);
+    outb(0xD6, 0x44 | 0x10 | 0x00 | 1);
+    outb(0xC4, (buffer_phys >> 1) & 0xFF);
+    outb(0xC4, ((buffer_phys >> 1) >> 8) & 0xFF);
+    outb(0x8B, (buffer_phys >> 16) & 0xFF);
+    outb(0xC6, count & 0xFF);
+    outb(0xC6, (count >> 8) & 0xFF);
+    outb(0xD4, 0x00 | 1);
 }
 
 static int sb16_open(const char* path, int flags) {
-    (void)path; (void)flags;
+    (void)path;
+    (void)flags;
     outb(SB_DSP_RESET, 1);
     for (volatile int i = 0; i < 2000; i++);
     outb(SB_DSP_RESET, 0);
-    
     volatile int timeout = 10000;
-    while ((inb(0x22E) & 0x80) == 0 && timeout > 0) { timeout--; }
+    while ((inb(0x22E) & 0x80) == 0 && timeout > 0) {
+        timeout--;
+    }
     if (inb(SB_DSP_READ) != 0xAA) return -1;
-
-    sb16_write_dsp(0xD1); // Speaker ON
-    initial_skip_count = 44; 
+    sb16_write_dsp(0xD1);
+    initial_skip_count = 44;
     return 0;
 }
 
 static int sb16_write(int backend_fd, const char* buf, int size) {
+    static int current_buffer_half = 0;
     (void)backend_fd;
     if (size <= 0) return size;
 
@@ -58,44 +59,47 @@ static int sb16_write(int backend_fd, const char* buf, int size) {
         }
     }
 
-    int bytes_to_copy = size - start_offset;
-    if (bytes_to_copy > 4096) bytes_to_copy = 4096;
+    int remaining_bytes = size - start_offset;
+    const char* src_ptr = buf + start_offset;
 
-    int dma_idx = 0;
-    for (int i = start_offset; i < start_offset + (bytes_to_copy & ~1); i += 2) {
-        int16_t sample16 = (int16_t)((uint8_t)buf[i] | ((uint8_t)buf[i + 1] << 8));
-        dma_buffer[dma_idx++] = (uint8_t)((sample16 + 32768) >> 8);
-    }
+    while (remaining_bytes > 0) {
+        int bytes_to_copy = (remaining_bytes > 8192) ? 8192 : remaining_bytes;
+        int target_offset = (current_buffer_half == 0) ? 0 : 8192;
 
-    if (dma_idx == 0) return size;
-
-    isa_dma_setup_channel1((uint32_t)dma_buffer, dma_idx);
-
-    sb16_write_dsp(0x40); // Set Sample Rate Constant
-    sb16_write_dsp(256 - (1000000 / 8000));
-
-    sb16_write_dsp(0x14); // Single-Cycle Output
-    uint16_t transfer_count = dma_idx - 1;
-    sb16_write_dsp(transfer_count & 0xFF);
-    sb16_write_dsp((transfer_count >> 8) & 0xFF);
-
-    // Minor hardware tick loop to let the channel latch open without blocking disk reads
-    for (uint32_t loop = 0; loop < 4; loop++) {
-        outb(0x43, 0x30);
-        outb(0x40, 0xA9);
-        outb(0x40, 0x04);
-        while (1) {
-            outb(0x43, 0x00);
-            uint8_t low = inb(0x40);
-            uint8_t high = inb(0x40);
-            uint16_t counter = (high << 8) | low;
-            if (counter > 0x04A9) break;
+        for (int i = 0; i < bytes_to_copy; i++) {
+            dma_buffer[target_offset + i] = (uint8_t)src_ptr[i];
         }
+
+        inb(0x22F);
+
+        uint32_t active_phys_addr = (uint32_t)dma_buffer + target_offset;
+        isa_dma_setup_channel5(active_phys_addr, bytes_to_copy);
+        
+        sb16_write_dsp(0x41);
+        sb16_write_dsp((8000 >> 8) & 0xFF);
+        sb16_write_dsp(8000 & 0xFF);
+        
+        sb16_write_dsp(0xB0);
+        sb16_write_dsp(0x10);
+        
+        uint16_t sample_count = (bytes_to_copy / 2) - 1;
+        sb16_write_dsp(sample_count & 0xFF);
+        sb16_write_dsp((sample_count >> 8) & 0xFF);
+
+        uint32_t samples_to_wait = bytes_to_copy / 2;
+        uint32_t micro_to_wait = (samples_to_wait * 1000000) / 8000;
+        uint32_t loops_to_wait = (micro_to_wait * 16) / 4;
+        for (volatile uint32_t k = 0; k < loops_to_wait; k++) {
+            __asm__ volatile("pause");
+        }
+
+        current_buffer_half = (current_buffer_half == 0) ? 1 : 0;
+        src_ptr += bytes_to_copy;
+        remaining_bytes -= bytes_to_copy;
     }
 
     return size;
 }
-
 static VFS_Operations sb16_vfs_ops = {
     .open = sb16_open,
     .close = (void*)0,
