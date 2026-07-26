@@ -492,7 +492,7 @@ void display_sync_live_screen(char* video);
 void display_restore_live_screen(char* video);
 void display_begin_capture(char* buffer, int max_len, int suppress_screen);
 int display_end_capture(void);
-void ac97_init(void);
+void sb16_init(void);
 int vfs_mount_audio_device(void);
 
 

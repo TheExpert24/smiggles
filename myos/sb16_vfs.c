@@ -103,7 +103,7 @@ static VFS_Operations sb16_vfs_ops = {
     .write = sb16_write
 };
 
-void ac97_init() {
+void sb16_init() {
 }
 
 int vfs_mount_audio_device() {
