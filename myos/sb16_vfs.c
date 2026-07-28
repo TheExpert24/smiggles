@@ -6,7 +6,12 @@
 #define SB_DSP_STATUS 0x22C
 
 static __attribute__((aligned(4096))) uint8_t dma_buffer[16384];
+static uint8_t ring_buffer[65536];
+static volatile uint32_t ring_head = 0;
+static volatile uint32_t ring_tail = 0;
 static int initial_skip_count = 0;
+static int playback_active = 0;
+static uint32_t current_sample_rate = 8000;
 
 static void sb16_write_dsp(uint8_t val) {
     while (inb(SB_DSP_STATUS) & 0x80);
@@ -40,14 +45,55 @@ static int sb16_open(const char* path, int flags) {
     if (inb(SB_DSP_READ) != 0xAA) return -1;
     sb16_write_dsp(0xD1);
     initial_skip_count = 44;
+    
+    // CRITICAL FIX: Reset all state flags cleanly on every file open
+    ring_head = 0;
+    ring_tail = 0;
+    playback_active = 0;
+    current_sample_rate = 8000;
+    
+    inb(0x22F); // Flush any stale hardware bits
     return 0;
 }
 
-static int sb16_write(int backend_fd, const char* buf, int size) {
+static void sb16_pump_hardware(void) {
     static int current_buffer_half = 0;
+    uint32_t available = (ring_head >= ring_tail) ? (ring_head - ring_tail) : (65536 - ring_tail + ring_head);
+    if (available < 8192) {
+        return;
+    }
+    int target_offset = (current_buffer_half == 0) ? 0 : 8192;
+    for (int i = 0; i < 8192; i++) {
+        dma_buffer[target_offset + i] = ring_buffer[ring_tail];
+        ring_tail = (ring_tail + 1) % 65536;
+    }
+    inb(0x22F);
+
+    uint32_t active_phys_addr = (uint32_t)dma_buffer + target_offset;
+    isa_dma_setup_channel5(active_phys_addr, 8192);
+    
+    sb16_write_dsp(0x41);
+    sb16_write_dsp((current_sample_rate >> 8) & 0xFF);
+    sb16_write_dsp(current_sample_rate & 0xFF);
+    
+    sb16_write_dsp(0xB0);
+    sb16_write_dsp(0x10);
+    sb16_write_dsp((4096 - 1) & 0xFF);
+    sb16_write_dsp(((4096 - 1) >> 8) & 0xFF);
+    
+    uint32_t micro_to_wait = (4096 * 1000000) / current_sample_rate;
+    uint32_t loops_to_wait = (micro_to_wait * 16) / 4;
+    for (volatile uint32_t k = 0; k < loops_to_wait; k++) {
+        __asm__ volatile("pause");
+    }
+
+    current_buffer_half = (current_buffer_half == 0) ? 1 : 0;
+}
+
+
+static int sb16_write(int backend_fd, const char* buf, int size) {
     (void)backend_fd;
     if (size <= 0) return size;
-
     int start_offset = 0;
     if (initial_skip_count > 0) {
         if (size >= initial_skip_count) {
@@ -58,48 +104,36 @@ static int sb16_write(int backend_fd, const char* buf, int size) {
             return size;
         }
     }
-
-    int remaining_bytes = size - start_offset;
+    int incoming_bytes = size - start_offset;
     const char* src_ptr = buf + start_offset;
-
-    while (remaining_bytes > 0) {
-        int bytes_to_copy = (remaining_bytes > 8192) ? 8192 : remaining_bytes;
-        int target_offset = (current_buffer_half == 0) ? 0 : 8192;
-
-        for (int i = 0; i < bytes_to_copy; i++) {
-            dma_buffer[target_offset + i] = (uint8_t)src_ptr[i];
+    for (int i = 0; i < incoming_bytes; i++) {
+        uint32_t next_head = (ring_head + 1) % 65536;
+        while (next_head == ring_tail) {
+            sb16_pump_hardware();
         }
-
-        inb(0x22F);
-
-        uint32_t active_phys_addr = (uint32_t)dma_buffer + target_offset;
-        isa_dma_setup_channel5(active_phys_addr, bytes_to_copy);
-        
-        sb16_write_dsp(0x41);
-        sb16_write_dsp((8000 >> 8) & 0xFF);
-        sb16_write_dsp(8000 & 0xFF);
-        
-        sb16_write_dsp(0xB0);
-        sb16_write_dsp(0x10);
-        
-        uint16_t sample_count = (bytes_to_copy / 2) - 1;
-        sb16_write_dsp(sample_count & 0xFF);
-        sb16_write_dsp((sample_count >> 8) & 0xFF);
-
-        uint32_t samples_to_wait = bytes_to_copy / 2;
-        uint32_t micro_to_wait = (samples_to_wait * 1000000) / 8000;
-        uint32_t loops_to_wait = (micro_to_wait * 16) / 4;
-        for (volatile uint32_t k = 0; k < loops_to_wait; k++) {
-            __asm__ volatile("pause");
-        }
-
-        current_buffer_half = (current_buffer_half == 0) ? 1 : 0;
-        src_ptr += bytes_to_copy;
-        remaining_bytes -= bytes_to_copy;
+        ring_buffer[ring_head] = (uint8_t)src_ptr[i];
+        ring_head = next_head;
     }
-
+    if (!playback_active) {
+        uint32_t loaded = (ring_head >= ring_tail) ? (ring_head - ring_tail) : (65536 - ring_tail + ring_head);
+        if (loaded >= 16384) {
+            playback_active = 1;
+            while (playback_active) {
+                uint32_t remaining = (ring_head >= ring_tail) ? (ring_head - ring_tail) : (65536 - ring_tail + ring_head);
+                if (remaining < 8192) {
+                    break;
+                }
+                sb16_pump_hardware();
+            }
+        }
+    }
     return size;
 }
+
+void sb16_set_sample_rate(uint32_t rate) {
+    if (rate > 0) current_sample_rate = rate;
+}
+
 static VFS_Operations sb16_vfs_ops = {
     .open = sb16_open,
     .close = (void*)0,

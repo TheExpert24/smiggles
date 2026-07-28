@@ -494,6 +494,8 @@ void display_begin_capture(char* buffer, int max_len, int suppress_screen);
 int display_end_capture(void);
 void sb16_init(void);
 int vfs_mount_audio_device(void);
+void sb16_set_sample_rate(uint32_t rate);
+
 
 
 // Editor

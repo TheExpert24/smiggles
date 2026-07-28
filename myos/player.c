@@ -3,6 +3,7 @@
 int vfs_open(const char* path, int flags);
 int vfs_write(int fd, const char* buf, int count);
 int vfs_close(int fd);
+void sb16_set_sample_rate(uint32_t rate);
 
 typedef struct {
     char chunk_id[4];
@@ -74,8 +75,14 @@ void play_wav_file_resolved(const char* resolved_path) {
     dbg_print_str("Header: ", 36, 16, 0x0E);
     int h_read = (int)syscall_invoke3(SYS_READ, (unsigned int)file_fd, (unsigned int)&header, (unsigned int)sizeof(dbg_wav_header_t));
     dbg_print_num(h_read, 44, 16, (h_read <= 0) ? 0x0C : 0x0A);
+    
+    if (header.sample_rate > 0) {
+        sb16_set_sample_rate(header.sample_rate);
+    }
+    
     uint32_t total_bytes = header.subchunk2_size;
     uint32_t byte_rate = header.byte_rate;
+    if (byte_rate == 0) byte_rate = header.sample_rate * 2;
     if (byte_rate == 0) byte_rate = 16000;
     if (total_bytes == 0 || total_bytes > 20000000) total_bytes = 4000000;
     uint32_t total_seconds = total_bytes / byte_rate;
