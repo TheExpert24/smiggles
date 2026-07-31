@@ -86,6 +86,9 @@ int udp_send_datagram(const uint8_t target_ip[4], uint16_t src_port, uint16_t ds
     uint8_t* ip;
     uint8_t* udp;
     uint8_t local_ip[4];
+    uint8_t subnet_mask[4] = {255, 255, 255, 0};
+    uint8_t gateway_ip[4] = {10, 0, 0, 1};
+    uint8_t route_ip[4];
     uint8_t dst_mac[6];
     Rtl8139Status status;
     int udp_len;
@@ -94,16 +97,27 @@ int udp_send_datagram(const uint8_t target_ip[4], uint16_t src_port, uint16_t ds
     if (!target_ip || !payload || payload_len < 0 || payload_len > UDP_RX_MAX_PAYLOAD) return -1;
     if (!rtl8139_get_status(&status) || !status.initialized) return -2;
     if (!arp_get_local_ip(local_ip)) return -3;
-    if (!arp_lookup_mac(target_ip, dst_mac)) return -4;
+
+    int is_local = 1;
+    for (int i = 0; i < 4; i++) {
+        if ((target_ip[i] & subnet_mask[i]) != (local_ip[i] & subnet_mask[i])) {
+            is_local = 0;
+            break;
+        }
+    }
+
+    for (int i = 0; i < 4; i++) {
+        route_ip[i] = is_local ? target_ip[i] : gateway_ip[i];
+    }
+
+    if (!arp_lookup_mac(route_ip, dst_mac)) return -4;
 
     udp_len = 8 + payload_len;
     ip_total_len = 20 + udp_len;
-
     copy_bytes(frame + 0, dst_mac, 6);
     copy_bytes(frame + 6, status.mac, 6);
     frame[12] = ETH_TYPE_IPV4_HI;
     frame[13] = ETH_TYPE_IPV4_LO;
-
     ip = frame + 14;
     ip[0] = 0x45;
     ip[1] = 0x00;
@@ -116,12 +130,10 @@ int udp_send_datagram(const uint8_t target_ip[4], uint16_t src_port, uint16_t ds
     copy_bytes(ip + 12, local_ip, 4);
     copy_bytes(ip + 16, target_ip, 4);
     write_be16(ip + 10, internet_checksum(ip, 20));
-
     udp = ip + 20;
     write_be16(udp + 0, src_port);
     write_be16(udp + 2, dst_port);
     write_be16(udp + 4, (uint16_t)udp_len);
-    // IPv4 allows UDP checksum 0, which keeps this first implementation simple.
     write_be16(udp + 6, 0x0000);
 
     if (payload_len > 0) {
@@ -132,7 +144,6 @@ int udp_send_datagram(const uint8_t target_ip[4], uint16_t src_port, uint16_t ds
         udp_stats.sent_packets++;
         return 1;
     }
-
     return -5;
 }
 

@@ -8,7 +8,7 @@
 #define ARP_OP_REQUEST 0x0001u
 #define ARP_OP_REPLY   0x0002u
 
-static uint8_t arp_local_ip[4] = {10, 0, 2, 15};
+static uint8_t arp_local_ip[4] = {10, 0, 0, 155};
 static uint8_t arp_local_ip_set = 1;
 
 static uint8_t arp_cache_valid[ARP_CACHE_SIZE];
@@ -185,7 +185,6 @@ int arp_get_cache_entry(int index, uint8_t ip_out[4], uint8_t mac_out[6]) {
 
 int arp_lookup_mac(const uint8_t ip[4], uint8_t mac_out[6]) {
     if (!ip || !mac_out) return 0;
-
     for (int i = 0; i < ARP_CACHE_SIZE; i++) {
         if (!arp_cache_valid[i]) continue;
         if (bytes_equal(arp_cache_ip[i], ip, 4)) {
@@ -193,6 +192,20 @@ int arp_lookup_mac(const uint8_t ip[4], uint8_t mac_out[6]) {
             return 1;
         }
     }
-
+    
+    arp_send_request(ip);
+    
+    for (volatile int delay = 0; delay < 50000; delay++) {
+        arp_poll_once();
+    }
+    
+    for (int i = 0; i < ARP_CACHE_SIZE; i++) {
+        if (!arp_cache_valid[i]) continue;
+        if (bytes_equal(arp_cache_ip[i], ip, 4)) {
+            copy_bytes(mac_out, arp_cache_mac[i], 6);
+            return 1;
+        }
+    }
     return 0;
 }
+

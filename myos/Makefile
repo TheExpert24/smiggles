@@ -45,7 +45,7 @@ C_SOURCES = \
 	diskio.c ata.c process.c syscall.c protection.c \
 	elf_load.c \
 	pci.c rtl8139.c arp.c ipv4.c icmp.c udp.c net.c \
-	tcp.c sockets.c hash.c logger.c sb16_vfs.c player.c
+	tcp.c sockets.c hash.c logger.c sb16_vfs.c player.c dns.c
 
 
 ASM_SOURCES = kernel_entry.asm

@@ -173,7 +173,20 @@ static void shell_normalize_abs_path(const char* abs_path, char* out_path) {
         str_concat(out_path, parts[p]);
     }
 }
+extern int resolve_domain_example(const char* target_domain, uint8_t* out_ip);
 
+void cmd_dns_test(char* video, int* cursor) {
+    uint8_t resolved_ip[4] = {0};
+    
+    print_string("Sending DNS query to the domain name\n", -1, video, cursor, 0x0E);
+    //domain name. works with any domain you enter here
+    int result = resolve_domain_example("nixoninc.tech", &resolved_ip[0]);
+    if (result == 1) {
+        print_string("Success!\n", -1, video, cursor, 0x0A);
+    } else {
+        print_string("DNS Query Failed.\n", -1, video, cursor, 0x0C);
+    }
+}
 static int shell_resolve_newfs_path(const char* raw_path, char* out_path) {
     char trimmed[MAX_PATH_LENGTH];
     char combined[MAX_PATH_LENGTH];
@@ -4458,6 +4471,10 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
     
     if (mini_strcmp(cmd, "pwd") == 0) {
         handle_pwd_command(video, cursor);
+    } else if (mini_strcmp(cmd, "dns") == 0) {
+        cmd_dns_test(video, cursor);
+    } else if (cmd[0] == 'd' && cmd[1] == 'n' && cmd[2] == 's' && cmd[3] == ' ') {
+        cmd_dns_test(video, cursor);
     } else if (mini_strcmp(cmd, "beep") == 0) {
         handle_beep_command("", video, cursor);
     } else if (cmd[0] == 'b' && cmd[1] == 'e' && cmd[2] == 'e' && cmd[3] == 'p' && cmd[4] == ' ') {
@@ -5492,6 +5509,7 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
             "reboot - restart\n"
             "halt - shutdown\n"
             "playgif <bgf filename> - plays the gif\n"
+            "play <wav filename> - plays the sound of the wav file\n"
             "beep <frequency number> - plays a sound\n"
             "\n"
             "More: help net | help pkg | help admin | help dev",
@@ -5733,7 +5751,8 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
             "tcp stats - TCP counters\n"
             "nettest - networking subsystem smoke checks\n"
             "sock open udp|bind|send|recv|close|list - UDP socket tools\n"
-            "udpecho start|step|run|stop|status - UDP echo server",
+            "udpecho start|step|run|stop|status - UDP echo server\n",
+            "dns - sends dns query to domain entered\n"
             -1, video, cursor, COLOR_LIGHT_GRAY);
     } else if (mini_strcmp(cmd, "help dev") == 0) {
         print_string(
