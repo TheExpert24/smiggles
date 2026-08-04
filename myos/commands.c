@@ -5751,8 +5751,8 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
             "tcp stats - TCP counters\n"
             "nettest - networking subsystem smoke checks\n"
             "sock open udp|bind|send|recv|close|list - UDP socket tools\n"
-            "udpecho start|step|run|stop|status - UDP echo server\n",
-            "dns - sends dns query to domain entered\n"
+            "udpecho start|step|run|stop|status - UDP echo server\n"
+            "dns - sends dns query to domain entered\n",
             -1, video, cursor, COLOR_LIGHT_GRAY);
     } else if (mini_strcmp(cmd, "help dev") == 0) {
         print_string(
