@@ -4,6 +4,7 @@ int vfs_open(const char* path, int flags);
 int vfs_write(int fd, const char* buf, int count);
 int vfs_close(int fd);
 void sb16_set_sample_rate(uint32_t rate);
+void sb16_set_stream_rate(uint32_t rate);
 
 typedef struct {
     char chunk_id[4];
@@ -84,6 +85,7 @@ void play_wav_file_resolved(const char* resolved_path) {
     uint32_t byte_rate = header.byte_rate;
     if (byte_rate == 0) byte_rate = header.sample_rate * 2;
     if (byte_rate == 0) byte_rate = 16000;
+    sb16_set_stream_rate(byte_rate);
     if (total_bytes == 0 || total_bytes > 20000000) total_bytes = 4000000;
     uint32_t total_seconds = total_bytes / byte_rate;
     uint32_t total_min = total_seconds / 60;

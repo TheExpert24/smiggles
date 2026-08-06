@@ -11,7 +11,9 @@ static volatile uint32_t ring_head = 0;
 static volatile uint32_t ring_tail = 0;
 static int initial_skip_count = 0;
 static int playback_active = 0;
+static int current_buffer_half = 0;
 static uint32_t current_sample_rate = 8000;
+static uint32_t current_byte_rate = 8000;
 
 static void sb16_write_dsp(uint8_t val) {
     while (inb(SB_DSP_STATUS) & 0x80);
@@ -50,15 +52,32 @@ static int sb16_open(const char* path, int flags) {
     ring_head = 0;
     ring_tail = 0;
     playback_active = 0;
+    current_buffer_half = 0;
     current_sample_rate = 8000;
+    current_byte_rate = 8000;
     
     inb(0x22F); // Flush any stale hardware bits
     return 0;
 }
 
-static void sb16_pump_hardware(void) {
-    static int current_buffer_half = 0;
+static uint32_t sb16_ring_available(void) {
     uint32_t available = (ring_head >= ring_tail) ? (ring_head - ring_tail) : (65536 - ring_tail + ring_head);
+    return available;
+}
+
+static void sb16_wait_for_chunk(uint32_t chunk_bytes) {
+    uint32_t byte_rate = current_byte_rate;
+    if (byte_rate == 0) byte_rate = 8000;
+    uint32_t wait_ticks = (chunk_bytes * 18u + byte_rate - 1u) / byte_rate;
+    if (wait_ticks == 0) wait_ticks = 1;
+    unsigned int start_ticks = (unsigned int)ticks;
+    while (((unsigned int)ticks - start_ticks) < wait_ticks) {
+        process_yield();
+    }
+}
+
+static void sb16_pump_hardware(void) {
+    uint32_t available = sb16_ring_available();
     if (available < 8192) {
         return;
     }
@@ -81,11 +100,7 @@ static void sb16_pump_hardware(void) {
     sb16_write_dsp((4096 - 1) & 0xFF);
     sb16_write_dsp(((4096 - 1) >> 8) & 0xFF);
     
-    uint32_t micro_to_wait = (4096 * 1000000) / current_sample_rate;
-    uint32_t loops_to_wait = (micro_to_wait * 16) / 4;
-    for (volatile uint32_t k = 0; k < loops_to_wait; k++) {
-        __asm__ volatile("pause");
-    }
+    sb16_wait_for_chunk(8192);
 
     current_buffer_half = (current_buffer_half == 0) ? 1 : 0;
 }
@@ -114,18 +129,12 @@ static int sb16_write(int backend_fd, const char* buf, int size) {
         ring_buffer[ring_head] = (uint8_t)src_ptr[i];
         ring_head = next_head;
     }
-    if (!playback_active) {
-        uint32_t loaded = (ring_head >= ring_tail) ? (ring_head - ring_tail) : (65536 - ring_tail + ring_head);
-        if (loaded >= 16384) {
-            playback_active = 1;
-            while (playback_active) {
-                uint32_t remaining = (ring_head >= ring_tail) ? (ring_head - ring_tail) : (65536 - ring_tail + ring_head);
-                if (remaining < 8192) {
-                    break;
-                }
-                sb16_pump_hardware();
-            }
-        }
+    uint32_t loaded = sb16_ring_available();
+    if (!playback_active && loaded >= 8192) {
+        playback_active = 1;
+    }
+    while (playback_active && sb16_ring_available() >= 8192) {
+        sb16_pump_hardware();
     }
     return size;
 }
@@ -134,9 +143,42 @@ void sb16_set_sample_rate(uint32_t rate) {
     if (rate > 0) current_sample_rate = rate;
 }
 
+void sb16_set_stream_rate(uint32_t rate) {
+    if (rate > 0) current_byte_rate = rate;
+}
+
+static int sb16_close(int backend_fd) {
+    (void)backend_fd;
+    if (sb16_ring_available() > 0) {
+        playback_active = 1;
+        while (sb16_ring_available() > 0) {
+            uint32_t available = sb16_ring_available();
+            if (available >= 8192) {
+                sb16_pump_hardware();
+                continue;
+            }
+            uint32_t padding = 8192 - available;
+            for (uint32_t i = 0; i < padding; i++) {
+                uint32_t next_head = (ring_head + 1) % 65536;
+                while (next_head == ring_tail) {
+                    sb16_pump_hardware();
+                }
+                ring_buffer[ring_head] = 0;
+                ring_head = next_head;
+            }
+            sb16_pump_hardware();
+        }
+    }
+    playback_active = 0;
+    ring_head = 0;
+    ring_tail = 0;
+    current_buffer_half = 0;
+    return 0;
+}
+
 static VFS_Operations sb16_vfs_ops = {
     .open = sb16_open,
-    .close = (void*)0,
+    .close = sb16_close,
     .read = (void*)0,
     .write = sb16_write
 };
