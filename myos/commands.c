@@ -4487,9 +4487,9 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
         handle_cd_command(cmd + 3, video, cursor, 0x0B);
     } else if (cmd[0] == 'c' && cmd[1] == 'd' && cmd[2] == 0) {
         handle_cd_command("", video, cursor, 0x0B);
-    }else if (cmd[0]=='t'&& cmd[1]=='e'&& cmd[2]=='s'&& cmd[3]=='t'&& cmd[4]=='_'&& cmd[5]=='s'&& cmd[6]=='o'&& cmd[7]=='u'&& cmd[8]=='n'&& cmd[9]=='d') {
+    } else if (cmd[0]=='t'&& cmd[1]=='e'&& cmd[2]=='s'&& cmd[3]=='t'&& cmd[4]=='_'&& cmd[5]=='s'&& cmd[6]=='o'&& cmd[7]=='u'&& cmd[8]=='n'&& cmd[9]=='d') {
         command_test_sound(video,cursor);
-    } else if (cmd[0] == 'p' && cmd[1] == 'l' && cmd[2] == 'a' && cmd[3] == 'y') {
+    } else if (cmd[0] == 'p' && cmd[1] == 'l' && cmd[2] == 'a' && cmd[3] == 'y' && (cmd[4] == ' ' || cmd[4] == 0)) {
         const char* args = cmd + 5;
         command_play(args, video, cursor);
     } else if (mini_strcmp(cmd, "ls") == 0) {
