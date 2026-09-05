@@ -629,9 +629,14 @@ int vfs_init(void) {
         dev_open_files[i].device_id = -1;
     }
     
-    // Initialize underlying disk filesystem
+    // Initialize underlying disk filesystem. Some real hardware USB/ISO boots do
+    // not expose a writable persistent disk, so keep booting in degraded mode
+    // instead of hard-failing during VFS setup.
     if (disk_fs_init() != 0) {
-        return -1;
+        vfs_mount("/proc", &vfs_proc_ops);
+        vfs_mount("/dev", &vfs_dev_ops);
+        vfs_mount("/tmp", &vfs_tmp_ops);
+        return 0;
     }
     
     // Mount root (/) on disk

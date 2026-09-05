@@ -45,9 +45,18 @@ int fs_runtime_ensure_newfs(void) {
     if (vfs_ready) return 1;
 
     if (disk_fs_init() != 0) {
-        // If image is not formatted yet, format once and re-init.
-        if (disk_fs_format() != 0) return 0;
-        if (disk_fs_init() != 0) return 0;
+        // Hybrid ISO boots on real USB media may have no persistent writable disk.
+        // In that case, continue in degraded mode rather than hard-failing the boot.
+        if (disk_fs_format() != 0) {
+            if (vfs_init() != 0) return 0;
+            vfs_ready = 1;
+            return 1;
+        }
+        if (disk_fs_init() != 0) {
+            if (vfs_init() != 0) return 0;
+            vfs_ready = 1;
+            return 1;
+        }
     }
 
     if (!ensure_newfs_layout()) return 0;
