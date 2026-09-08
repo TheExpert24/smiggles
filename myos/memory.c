@@ -7,7 +7,7 @@
 
 #define PAGE_SIZE          4096
 #define FIRST_MANAGED_PHYS 0x00100000           // Start managing at 1 MiB
-#define FALLBACK_MEMORY_TOP (16 * 1024 * 1024)
+#define FALLBACK_MEMORY_TOP (64 * 1024 * 1024)
 
 #define MULTIBOOT2_BOOTLOADER_MAGIC 0x36D76289u
 #define MB2_TAG_TYPE_END 0u
@@ -848,6 +848,32 @@ void init_paging(uint32_t mb_magic, uint32_t mb_info_addr) {
 
         // Present | RW (supervisor-only)
         kernel_page_directory[i] = ((unsigned int)(uintptr_t)page_table) | PAGE_FLAG_PRESENT | PAGE_FLAG_RW;
+    }
+
+    // UEFI framebuffers may live outside normal RAM. Map their physical range
+    // without treating video memory as allocatable RAM.
+    {
+        uint32_t framebuffer_start = display_framebuffer_start();
+        uint32_t framebuffer_end = display_framebuffer_end();
+        if (framebuffer_end > framebuffer_start) {
+            uint32_t first_pde = framebuffer_start / PAGE_4M_SIZE;
+            uint32_t last_pde = (framebuffer_end - 1u) / PAGE_4M_SIZE;
+            if (last_pde < 1024u) {
+                for (uint32_t pde = first_pde; pde <= last_pde; pde++) {
+                    if (kernel_page_directory[pde] & PAGE_FLAG_PRESENT) continue;
+                    uint32_t* page_table = alloc_zeroed_page();
+                    if (!page_table) while (1) { }
+                    uint32_t base = pde * PAGE_4M_SIZE;
+                    for (uint32_t page = 0; page < 1024; page++) {
+                        uint32_t phys = base + page * PAGE_SIZE;
+                        if (phys >= framebuffer_start && phys < framebuffer_end) {
+                            page_table[page] = phys | PAGE_FLAG_PRESENT | PAGE_FLAG_RW;
+                        }
+                    }
+                    kernel_page_directory[pde] = ((unsigned int)(uintptr_t)page_table) | PAGE_FLAG_PRESENT | PAGE_FLAG_RW;
+                }
+            }
+        }
     }
 
     // Ensure classic 4 KiB paging mode.

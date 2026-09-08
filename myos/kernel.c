@@ -57,7 +57,20 @@ static void panic_draw_mouse(char* video, int col, int row, int* visible, int* s
 
 static void panic_reboot(void) {
     asm volatile("cli");
+
+    // Modern PCs usually implement reset through the chipset reset port.
+    outb(0xCF9, 0x06);
+    outb(0xCF9, 0x0E);
+
+    // Fall back to the legacy keyboard-controller reset.
     outb(0x64, 0xFE);
+
+    // Last resort: an invalid IDT plus interrupt causes a CPU reset.
+    struct {
+        uint16_t limit;
+        uint32_t base;
+    } __attribute__((packed)) empty_idt = { 0, 0 };
+    asm volatile("lidt %0\n\tint $3" : : "m"(empty_idt));
     while (1) {
         asm volatile("hlt");
     }
@@ -81,37 +94,20 @@ static void panic_command_loop(char* video) {
     int mouse_saved_offset = -1;
     char mouse_saved_char = ' ';
     unsigned char mouse_saved_attr = COLOR_LIGHT_RED;
-    MouseState mouse_state;
-
     panic_write_at(video, 18, 2, "Type 'reboot' or 'halt' and press Enter.", COLOR_WHITE);
     panic_write_at(video, 20, 2, "> ", COLOR_YELLOW);
     panic_draw_mouse(video, mouse_col, mouse_row, &mouse_visible, &mouse_saved_offset, &mouse_saved_char, &mouse_saved_attr);
     set_cursor_position(20 * 80 + 4);
+    display_flush_framebuffer();
 
     while (1) {
-        mouse_poll_hardware();
-        if (mouse_poll_state(&mouse_state)) {
-            panic_hide_mouse(video, &mouse_visible, &mouse_saved_offset, &mouse_saved_char, &mouse_saved_attr);
-            mouse_col = mouse_state.col;
-            mouse_row = mouse_state.row;
-            panic_draw_mouse(video, mouse_col, mouse_row, &mouse_visible, &mouse_saved_offset, &mouse_saved_char, &mouse_saved_attr);
-            set_cursor_position(20 * 80 + 4 + cmd_len);
-        }
-
         unsigned char status = inb(0x64);
         if ((status & 0x01) == 0) {
             continue;
         }
 
         if (status & 0x20) {
-            mouse_poll_hardware();
-            if (mouse_poll_state(&mouse_state)) {
-                panic_hide_mouse(video, &mouse_visible, &mouse_saved_offset, &mouse_saved_char, &mouse_saved_attr);
-                mouse_col = mouse_state.col;
-                mouse_row = mouse_state.row;
-                panic_draw_mouse(video, mouse_col, mouse_row, &mouse_visible, &mouse_saved_offset, &mouse_saved_char, &mouse_saved_attr);
-                set_cursor_position(20 * 80 + 4 + cmd_len);
-            }
+            inb(0x60);
             continue;
         }
 
@@ -133,7 +129,7 @@ static void panic_command_loop(char* video) {
 
         if (e0_prefix) {
             e0_prefix = 0;
-            continue;
+            if (scancode != 0x1C) continue;
         }
 
         if (scancode & 0x80) {
@@ -155,6 +151,7 @@ static void panic_command_loop(char* video) {
                 }
                 panic_draw_mouse(video, mouse_col, mouse_row, &mouse_visible, &mouse_saved_offset, &mouse_saved_char, &mouse_saved_attr);
                 set_cursor_position(20 * 80 + 4 + cmd_len);
+                display_flush_framebuffer_cell(4 + cmd_len, 20);
                 continue;
             }
 
@@ -176,6 +173,7 @@ static void panic_command_loop(char* video) {
                 cmd[0] = 0;
                 panic_draw_mouse(video, mouse_col, mouse_row, &mouse_visible, &mouse_saved_offset, &mouse_saved_char, &mouse_saved_attr);
                 set_cursor_position(20 * 80 + 4);
+                display_flush_framebuffer();
                 continue;
             }
 
@@ -194,6 +192,7 @@ static void panic_command_loop(char* video) {
                 panic_draw_mouse(video, mouse_col, mouse_row, &mouse_visible, &mouse_saved_offset, &mouse_saved_char, &mouse_saved_attr);
                 set_cursor_position(20 * 80 + 4 + cmd_len);
             }
+            display_flush_framebuffer_cell(3 + cmd_len, 20);
         }
     }
 }
@@ -215,7 +214,7 @@ void nosound(void) {
 }
 
 void kernel_panic(const char* reason, const char* detail) {
-    char* video = (char*)0xB8000;
+    char* video = display_text_buffer();
     char buf[64];
 
     asm volatile("cli");
@@ -244,7 +243,6 @@ void kernel_panic(const char* reason, const char* detail) {
     str_concat(buf, "Current process: ");
     panic_append_dec(buf, current_process);
     panic_write_at(video, 12, 2, buf, COLOR_LIGHT_CYAN);
-
     buf[0] = 0;
     str_concat(buf, "Last key/scancode: ");
     panic_append_dec(buf, (unsigned char)last_key);
@@ -253,6 +251,8 @@ void kernel_panic(const char* reason, const char* detail) {
     panic_write_at(video, 15, 2, "System halted. Reboot required.", COLOR_YELLOW);
 
     set_cursor_position(0);
+
+    display_flush_framebuffer();
 
     panic_command_loop(video);
 }
@@ -528,7 +528,8 @@ void shell_read_line(char* prompt, char* buf, int max_len, char* video, int* cur
 }
 
 void kernel_main(unsigned int mb_magic, unsigned int mb_info_addr) {
-    char* video = (char*)0xB8000;
+    display_set_multiboot_framebuffer(mb_magic, mb_info_addr);
+    char* video = display_text_buffer();
     int cursor = 0;
     int line_start = 0;
     int boot_cursor = 0;
@@ -552,26 +553,7 @@ void kernel_main(unsigned int mb_magic, unsigned int mb_info_addr) {
     
     // Show boot splash screen with animated dots
     print_boot_splash(video);
-    
-    // Simple delay loop (counts iterations instead of relying on ticks)
-    // ~500 million iterations = ~5 seconds
-    for (int delay = 0; delay < 500000000; delay++) {
-        // Add animated dots
-        if (delay % 50000000 == 0 && delay > 0) {
-            int dot_count = (delay / 50000000) % 4;
-            for (int d = 0; d < dot_count; d++) {
-                int offset = (20 * 80 + 39 + 19 + d) * 2;
-                video[offset] = '.';
-                video[offset + 1] = COLOR_GREEN;
-            }
-            // Clear extra dots
-            for (int d = dot_count; d < 3; d++) {
-                int offset = (20 * 80 + 39 + 19 + d) * 2;
-                video[offset] = ' ';
-                video[offset + 1] = COLOR_BLACK;
-            }
-        }
-    }
+    display_flush_framebuffer();
     
     // Clear screen for boot messages
     for (int i = 0; i < 80*25*2; i += 2) {
@@ -664,6 +646,8 @@ void kernel_main(unsigned int mb_magic, unsigned int mb_info_addr) {
         i++;
     }
     line_start = cursor;
+
+    display_flush_framebuffer();
 
     
     set_cursor_position(cursor);

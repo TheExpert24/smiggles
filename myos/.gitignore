@@ -3,6 +3,9 @@
 *.img
 *.o
 *.elf
+*.d
+*.iso
+iso/
 
 
 .vscode/

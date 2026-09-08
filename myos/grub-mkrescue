@@ -39,6 +39,16 @@ fi
 grub_root="$(dirname "$grub_mkimage")"
 cdboot_img="$grub_root/i386-pc/cdboot.img"
 grub_mod_dir="$grub_root/i386-pc"
+grub_efi_mod_dir="$grub_root/x86_64-efi"
+grub_mformat="${GRUB_MFORMAT:-mformat}"
+grub_mmd="${GRUB_MMD:-mmd}"
+grub_mcopy="${GRUB_MCOPY:-mcopy}"
+
+if [ "$grub_mformat" = "mformat" ] && [ -x "/c/msys64/mingw64/bin/mformat.exe" ]; then
+  grub_mformat="/c/msys64/mingw64/bin/mformat.exe"
+  grub_mmd="/c/msys64/mingw64/bin/mmd.exe"
+  grub_mcopy="/c/msys64/mingw64/bin/mcopy.exe"
+fi
 
 if [ ! -f "$cdboot_img" ]; then
   echo "cdboot.img not found at: $cdboot_img" >&2
@@ -50,6 +60,19 @@ if [ ! -d "$grub_mod_dir" ]; then
   echo "GRUB module directory not found: $grub_mod_dir" >&2
   exit 1
 fi
+
+if [ ! -d "$grub_efi_mod_dir" ]; then
+  echo "GRUB EFI module directory not found: $grub_efi_mod_dir" >&2
+  exit 1
+fi
+
+for tool in "$grub_mformat" "$grub_mmd" "$grub_mcopy"; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "Required EFI image tool not found: $tool" >&2
+    echo "Install mtools or set GRUB_MFORMAT, GRUB_MMD, and GRUB_MCOPY." >&2
+    exit 1
+  fi
+done
 
 if command -v xorriso >/dev/null 2>&1; then
   iso_tool="xorriso"
@@ -65,6 +88,7 @@ trap 'rm -rf "$tmp_dir"' EXIT
 
 mkdir -p "$iso_dir/boot/grub"
 mkdir -p "$iso_dir/boot/grub/i386-pc"
+mkdir -p "$iso_dir/EFI/BOOT"
 
 # Provide runtime modules on the ISO where GRUB expects them.
 cp -a "$grub_mod_dir/." "$iso_dir/boot/grub/i386-pc/"
@@ -82,8 +106,31 @@ EOF
 
 cat "$cdboot_img" "$tmp_dir/core.img" > "$iso_dir/boot/grub/eltorito.img"
 
+cat > "$tmp_dir/efi.cfg" <<'EOF'
+set prefix=($root)/boot/grub
+configfile /boot/grub/grub.cfg
+EOF
+
+"$grub_mkimage" -O x86_64-efi \
+  -o "$tmp_dir/BOOTX64.EFI" \
+  -p /boot/grub \
+  -c "$tmp_dir/efi.cfg" \
+  part_gpt part_msdos fat iso9660 normal configfile multiboot2
+
+efi_img="$tmp_dir/efiboot.img"
+dd if=/dev/zero of="$efi_img" bs=1M count=1 2>/dev/null
+"$grub_mformat" -i "$efi_img" -F ::
+"$grub_mmd" -i "$efi_img" ::/EFI ::/EFI/BOOT
+"$grub_mcopy" -i "$efi_img" "$tmp_dir/BOOTX64.EFI" ::/EFI/BOOT/BOOTX64.EFI
+cp "$tmp_dir/BOOTX64.EFI" "$iso_dir/EFI/BOOT/BOOTX64.EFI"
+cp "$efi_img" "$iso_dir/efiboot.img"
+
 "$iso_tool" -as mkisofs -R \
   -b boot/grub/eltorito.img \
   -c boot.catalog \
   -no-emul-boot -boot-load-size 4 -boot-info-table \
+  -eltorito-alt-boot -e efiboot.img -no-emul-boot \
+  -isohybrid-gpt-basdat \
+  --efi-boot-part --efi-boot-image \
+  -append_partition 2 0xef "$iso_dir/efiboot.img" \
   -o "$out_iso" "$iso_dir" >/dev/null

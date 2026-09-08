@@ -174,6 +174,7 @@ static void editor_sync_cursor_and_view(const char* buf, int len, char* video, i
     }
 
     render_editor_view(buf, len, video, edit_start, *view_top_row);
+    display_flush_framebuffer();
 
     screen_row = cur_row - *view_top_row;
     if (screen_row < 0) screen_row = 0;
@@ -276,6 +277,7 @@ void nano_editor(const char* filename, char* video, int* cursor) {
         view_top_row = initial_row - EDIT_ROWS + 1;
     }
     render_editor_view(buf, len, video, edit_start, view_top_row);
+    display_flush_framebuffer();
     int initial_screen_row = initial_row - view_top_row;
     int initial_pos = edit_start + initial_screen_row * EDIT_COLS + initial_col;
     if (initial_pos >= 80*25) initial_pos = 80*25 - 1;
@@ -336,6 +338,7 @@ void nano_editor(const char* filename, char* video, int* cursor) {
             }
 
             render_editor_view(buf, len, video, edit_start, view_top_row);
+            display_flush_framebuffer();
 
             int screen_row = cur_row - view_top_row;
             if (screen_row < 0) screen_row = 0;
@@ -456,6 +459,7 @@ void nano_editor(const char* filename, char* video, int* cursor) {
         }
 
         render_editor_view(buf, len, video, edit_start, view_top_row);
+        display_flush_framebuffer();
 
         int screen_row = cur_row - view_top_row;
         if (screen_row < 0) screen_row = 0;

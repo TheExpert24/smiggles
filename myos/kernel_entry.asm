@@ -10,7 +10,21 @@ mb2_header_start:
     dd 0xE85250D6                ; Multiboot2 magic
     dd 0                         ; i386 architecture
     dd mb2_header_end - mb2_header_start
-    dd -(0xE85250D6 + 0 + (mb2_header_end - mb2_header_start))
+%ifdef BIOS
+    dd 0x17ADAF12
+%else
+    dd 0x17ADAEFA
+
+    ; Request a framebuffer from the Multiboot2 loader.
+    dw 5
+    dw 0
+    dd 20
+    dd 1024
+    dd 768
+    dd 32
+
+    align 8, db 0
+%endif
 
     ; Required end tag.
     dw 0

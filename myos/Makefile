@@ -19,6 +19,10 @@ GRUB_FILE ?= $(shell \
 	command -v grub-file 2>/dev/null || \
 	command -v i686-elf-grub-file 2>/dev/null)
 
+GRUB_MKIMAGE ?= $(shell \
+	command -v grub-mkimage 2>/dev/null || \
+	echo /c/tools/grub-2.06-for-windows/grub-mkimage.exe)
+
 define check_tool
 	@test -n "$(1)" || { echo "ERROR: $(2) not found. Install it or set $(3)= on the make command line."; exit 1; }
 endef
@@ -42,7 +46,7 @@ C_SOURCES = \
 	kernel.c interrupts.c memory.c \
 	filesystem_disk.c filesystem_inode.c filesystem_fileio.c filesystem_vfs.c filesystem_path.c strings.c \
 	display.c calculator.c basic.c editor.c commands.c clipboard.c \
-	diskio.c ata.c process.c syscall.c protection.c \
+	diskio.c ramdisk.c ata.c process.c syscall.c protection.c \
 	elf_load.c \
 	pci.c rtl8139.c arp.c ipv4.c icmp.c udp.c net.c \
 	tcp.c sockets.c hash.c logger.c sb16_vfs.c player.c dns.c
@@ -52,6 +56,7 @@ ASM_SOURCES = kernel_entry.asm
 
 OBJS = $(C_SOURCES:.c=.o) $(ASM_SOURCES:.asm=.o)
 DEPS = $(C_SOURCES:.c=.d)
+BIOS_OBJS = $(C_SOURCES:.c=.o) kernel_entry_bios.o
 
 all: smiggles.iso hdd.img
 
@@ -61,6 +66,9 @@ all: smiggles.iso hdd.img
 %.o: %.asm
 	$(ASM) -f elf32 $< -o $@
 
+kernel_entry_bios.o: kernel_entry.asm
+	$(ASM) -f elf32 -dBIOS $< -o $@
+
 kernel.elf: $(OBJS) linker.ld
 	$(LD) $(LDFLAGS) $(OBJS) -o $@
 	@if [ -n "$(GRUB_FILE)" ]; then \
@@ -69,14 +77,25 @@ kernel.elf: $(OBJS) linker.ld
 
 iso/boot/grub/grub.cfg:
 	mkdir -p iso/boot/grub
-	printf 'set timeout=0\nset default=0\nterminal_output console\ninsmod multiboot2\nmultiboot2 /boot/kernel.elf\nboot\n' > $@
+	printf 'set timeout=0\nset default=0\nset gfxmode=text\nset gfxpayload=text\nterminal_input console\nterminal_output console\ninsmod multiboot2\nmultiboot2 /boot/kernel.elf vga\nboot\n' > $@
 
-smiggles.iso: kernel.elf iso/boot/grub/grub.cfg
+smiggles.iso: kernel-bios.elf iso/boot/grub/grub.cfg
 	$(call check_tool,$(GRUB_MKRESCUE),grub-mkrescue / i686-elf-grub-mkrescue,GRUB_MKRESCUE)
 	mkdir -p iso/boot
-	cp kernel.elf iso/boot/kernel.elf
+	cp kernel-bios.elf iso/boot/kernel.elf
 	@if [ -d ../tools ] ; then cp -f ../tools/*.bgf iso/ 2>/dev/null || true ; fi
 	$(GRUB_MKRESCUE) -o $@ iso >/dev/null
+
+kernel-bios.elf: $(BIOS_OBJS) linker.ld
+	$(LD) $(LDFLAGS) $(BIOS_OBJS) -o $@
+	@if [ -n "$(GRUB_FILE)" ]; then \
+		$(GRUB_FILE) --is-x86-multiboot2 $@ || { echo "Not multiboot2!"; exit 1; }; \
+	fi
+
+smiggles-usb.img: kernel.elf make-uefi-usb.sh
+	./make-uefi-usb.sh "$@" kernel.elf "$(GRUB_MKIMAGE)"
+
+usb-image: smiggles-usb.img
 
 HDD_QEMU_OPTS ?= file=hdd.img,format=raw,if=ide,bus=0,unit=0
 
@@ -95,4 +114,4 @@ clean:
 
 -include $(DEPS)
 
-.PHONY: all run clean seed_bgf
+.PHONY: all run clean seed_bgf usb-image

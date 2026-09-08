@@ -30,6 +30,15 @@ Install GNU Make
 1) Download the "Complete package" from [GNUWin32](https://gnuwin32.sourceforge.net/packages/make.htm)
 2) Test by opening a terminal and running ```make --version```
 
+Install the EFI image tools. In an MSYS2 terminal, run:
+```bash
+pacman -S --needed mingw-w64-x86_64-mtools
+```
+
+The build uses these tools to create a dual BIOS/UEFI boot image. Run the
+Makefile from Bash (for example, an MSYS2 or Git Bash terminal), because it
+uses Unix commands such as `mkdir -p` and `cp`.
+
 
 ![testing commands](images/image.png)
 
@@ -59,4 +68,16 @@ Install GNU Make
 **I have tested this installation sequence on Windows and Mac but I can't verify if it works on Linux. I think it should work but I'm not sure.**
 
 Instructions for running smiggles are in [buildandrun.md](buildandrun.md).
+
+### Creating a ThinkPad UEFI USB image
+
+From a Bash terminal at the repository root, run:
+```bash
+make usb-image
+```
+
+This creates `myos/smiggles-usb.img`, a standalone FAT32 UEFI image. Restore
+that image to the USB with Ubuntu Disks using **Restore Disk Image...**. This
+is the recommended image for the Lenovo ThinkPad; the ISO is still used for
+QEMU and optical-style boot testing.
 
