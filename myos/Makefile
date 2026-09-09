@@ -21,6 +21,9 @@ GRUB_FILE ?= $(shell \
 
 GRUB_MKIMAGE ?= $(shell \
 	command -v grub-mkimage 2>/dev/null || \
+	command -v x86_64-elf-grub-mkimage 2>/dev/null || \
+	command -v i686-elf-grub-mkimage 2>/dev/null || \
+	command -v grub2-mkimage 2>/dev/null || \
 	echo /c/tools/grub-2.06-for-windows/grub-mkimage.exe)
 
 define check_tool
@@ -93,7 +96,7 @@ kernel-bios.elf: $(BIOS_OBJS) linker.ld
 	fi
 
 smiggles-usb.img: kernel.elf make-uefi-usb.sh
-	./make-uefi-usb.sh "$@" kernel.elf "$(GRUB_MKIMAGE)"
+	bash ./make-uefi-usb.sh "$@" kernel.elf "$(GRUB_MKIMAGE)"
 
 usb-image: smiggles-usb.img
 
