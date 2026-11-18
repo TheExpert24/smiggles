@@ -257,6 +257,9 @@ void keyboard_handler() {
         keyboard_buffer[keyboard_head] = scancode;
         keyboard_head = next_head;
     }
+    if (!(scancode & 0x80u)) {
+        process_wake_waiting(PROC_WAIT_KEYBOARD);
+    }
 
     asm volatile("outb %0, %1" : : "a"((unsigned char)PIC_EOI), "Nd"((uint16_t)PIC1_COMMAND));
 }
@@ -270,6 +273,18 @@ void mouse_handler() {
 }
 
 void exception_handler(unsigned int vector, unsigned int error_code, unsigned int eip, unsigned int cs, unsigned int eflags) {
+    // Ring-3 faults belong to the faulting process, not to the kernel.
+    // Terminate it as SIGSEGV/SIGILL and return control to the scheduler.
+    if ((cs & 3u) == 3u) {
+        unsigned int exit_code = 128u;
+        if (vector == 14u) exit_code += 11u; // SIGSEGV
+        else if (vector == 13u) exit_code += 11u;
+        else if (vector == 6u) exit_code += 4u; // SIGILL
+        else exit_code += 8u;
+        process_exit_with_status(exit_code);
+        while (1) { asm volatile("hlt"); }
+    }
+
     char detail[160];
     char value_buf[32];
 

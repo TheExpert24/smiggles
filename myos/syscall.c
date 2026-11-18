@@ -435,7 +435,7 @@ unsigned int linux_syscall_dispatch(unsigned int number,
     // ── exit / exit_group ────────────────────────────────────────────────────
     case LINUX_SYS_EXIT:
     case LINUX_SYS_EXIT_GROUP:
-        process_exit();
+        process_exit_with_status(arg0);
         return 0; // not reached
 
     // ── write ────────────────────────────────────────────────────────────────
@@ -464,11 +464,14 @@ unsigned int linux_syscall_dispatch(unsigned int number,
         int   len = (int)arg2;
         if (!buf || len <= 0) return 0;
         if (fd == 0) {
-            // Read one line from keyboard (blocking spin on keyboard buffer)
+            // Read one line from keyboard. Yield without consuming CPU while
+            // the process waits for an IRQ to add a scancode.
             int n = 0;
             while (n < len - 1) {
                 unsigned char sc;
-                while (!keyboard_pop_scancode(&sc)) { /* spin */ }
+                while (!keyboard_pop_scancode(&sc)) {
+                    process_block_current(PROC_WAIT_KEYBOARD, 0u);
+                }
                 if (sc & 0x80) continue;                    // key release
                 char c = scancode_to_char(sc, 0);
                 if (!c) continue;
@@ -506,6 +509,15 @@ unsigned int linux_syscall_dispatch(unsigned int number,
         if (!ensure_newfs_ready()) return (unsigned int)LINUX_ENOSYS;
         int r = vfs_close((int)arg0);
         return (r < 0) ? (unsigned int)LINUX_EBADF : 0;
+    }
+
+    // ── waitpid ──────────────────────────────────────────────────────────────
+    case LINUX_SYS_WAITPID: {
+        int status_pid = process_waitpid((int)arg0,
+                                         (unsigned int*)arg1,
+                                         (int)arg2);
+        if (status_pid < 0) return (unsigned int)status_pid;
+        return (unsigned int)status_pid;
     }
 
     // ── getpid ───────────────────────────────────────────────────────────────
@@ -600,11 +612,19 @@ unsigned int syscall_dispatch(unsigned int number,
             else ret = (unsigned int)current_process;
             break;
         case SYS_WAIT_TICKS: {
-            unsigned int start = (unsigned int)ticks;
-            while (((unsigned int)ticks - start) < arg0) {
-                process_yield();
+            if (arg0 == 0u) {
+                ret = (unsigned int)ticks;
+            } else if (current_process < 0) {
+                unsigned int start = (unsigned int)ticks;
+                while (((unsigned int)ticks - start) < arg0) {
+                    asm volatile("hlt");
+                }
+                ret = (unsigned int)ticks;
+            } else {
+                unsigned int wake_at = (unsigned int)ticks + arg0;
+                process_block_current(PROC_WAIT_TIMER, wake_at);
+                ret = (unsigned int)ticks;
             }
-            ret = (unsigned int)ticks;
             break;
         }
         case SYS_SPAWN_DEMO:

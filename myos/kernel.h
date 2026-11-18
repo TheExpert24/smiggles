@@ -100,6 +100,10 @@ typedef struct {
     unsigned int page_directory;
     unsigned int esp;
     unsigned int eip;
+    unsigned int exit_code;
+    unsigned int wait_reaped;
+    unsigned int block_reason;
+    unsigned int block_arg;
     unsigned int stack_guard_base;
     unsigned int stack_base;
     unsigned int stack_size;
@@ -164,6 +168,11 @@ void schedule(void);
 
 // Terminate current process
 void process_exit(void);
+void process_exit_with_status(unsigned int exit_code);
+void process_block_current(unsigned int block_reason, unsigned int block_arg);
+void process_wake_waiting(unsigned int block_reason);
+void process_wake_waiting_with_arg(unsigned int block_reason, unsigned int arg);
+int process_waitpid(int pid, unsigned int* status, int options);
 
 // Voluntarily yield CPU
 void process_yield(void);
@@ -667,6 +676,12 @@ extern void resume_from_irq_context(IRQContext* ctx);
 #define LINUX_EFAULT    (-14)
 #define LINUX_EINVAL    (-22)
 #define LINUX_ENOSYS    (-38)
+#define LINUX_ECHILD    (-10)
+#define LINUX_EAGAIN    (-11)
+
+#define PROC_WAIT_KEYBOARD 1u
+#define PROC_WAIT_CHILD    2u
+#define PROC_WAIT_TIMER    3u
 
 // Linux uname() struct (old_utsname layout used by most static binaries)
 typedef struct {

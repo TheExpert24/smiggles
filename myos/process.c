@@ -63,12 +63,10 @@ static void process_reap_exited(void) {
     for (int i = 0; i < MAX_PROCESSES; i++) {
         if (i == current_process) continue;
         if (process_table[i].state != PROC_EXITED) continue;
-        if (process_table[i].stack_base == 0 &&
-            process_table[i].user_stack_base == 0 &&
-            process_table[i].page_directory == 0) {
-            continue;
+        if (process_table[i].wait_reaped || process_table[i].parent_pid < 0) {
+            process_release_resources(&process_table[i]);
+            process_table[i].state = PROC_UNUSED;
         }
-        process_release_resources(&process_table[i]);
     }
 }
 
@@ -193,6 +191,10 @@ void init_process_table() {
         process_table[i].page_directory = 0;
         process_table[i].esp = 0;
         process_table[i].eip = 0;
+        process_table[i].exit_code = 0;
+        process_table[i].wait_reaped = 0;
+        process_table[i].block_reason = 0;
+        process_table[i].block_arg = 0;
         process_table[i].stack_guard_base = 0;
         process_table[i].stack_base = 0;
         process_table[i].stack_size = 0;
@@ -244,6 +246,10 @@ int process_create(unsigned int entry_point) {
             process_table[i].state = PROC_READY;
             process_table[i].name[0] = 0;
             process_table[i].eip = entry_point;
+            process_table[i].exit_code = 0;
+            process_table[i].wait_reaped = 0;
+            process_table[i].block_reason = 0;
+            process_table[i].block_arg = 0;
             process_table[i].stack_size = PAGE_SIZE_BYTES;
             process_table[i].stack_guard_base = 0;
             process_table[i].user_stack_base = 0;
@@ -459,12 +465,86 @@ void schedule(void) {
 
 // Terminate current process
 void process_exit(void) {
+    process_exit_with_status(0u);
+}
+
+void process_exit_with_status(unsigned int exit_code) {
     if (current_process < 0 || current_process >= MAX_PROCESSES) return;
     PCB* proc = &process_table[current_process];
+    proc->exit_code = exit_code & 0xFFu;
+    proc->wait_reaped = 0;
     proc->state = PROC_EXITED;
     proc->run_ticks++;
+    if (proc->parent_pid >= 0 &&
+        proc->parent_pid < MAX_PROCESSES) {
+        PCB* parent = &process_table[proc->parent_pid];
+        if (parent->state == PROC_BLOCKED &&
+            parent->block_reason == PROC_WAIT_CHILD) {
+            parent->block_reason = 0;
+            parent->block_arg = 0;
+            parent->state = PROC_READY;
+        }
+    }
     schedule();
     while (1) { }
+}
+
+void process_block_current(unsigned int block_reason, unsigned int block_arg) {
+    if (current_process < 0 || current_process >= MAX_PROCESSES) return;
+    PCB* proc = &process_table[current_process];
+    proc->block_reason = block_reason;
+    proc->block_arg = block_arg;
+    proc->state = PROC_BLOCKED;
+    schedule();
+}
+
+void process_wake_waiting(unsigned int block_reason) {
+    process_wake_waiting_with_arg(block_reason, 0u);
+}
+
+void process_wake_waiting_with_arg(unsigned int block_reason, unsigned int arg) {
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        PCB* proc = &process_table[i];
+        if (proc->state != PROC_BLOCKED) continue;
+        if (proc->block_reason != block_reason) continue;
+        if (block_reason == PROC_WAIT_TIMER &&
+            (unsigned int)ticks < proc->block_arg) continue;
+        if (arg != 0u && proc->block_arg != arg) continue;
+        proc->block_reason = 0;
+        proc->block_arg = 0;
+        proc->state = PROC_READY;
+    }
+}
+
+int process_waitpid(int pid, unsigned int* status, int options) {
+    int parent_pid = current_process;
+
+    while (1) {
+        int found_child = 0;
+
+        for (int i = 0; i < MAX_PROCESSES; i++) {
+            PCB* proc = &process_table[i];
+            if (proc->state == PROC_UNUSED) continue;
+            if (pid != -1 && proc->pid != pid) continue;
+            if (proc->parent_pid != parent_pid) continue;
+            found_child = 1;
+            if (proc->state == PROC_EXITED) {
+                if (status) *status = (proc->exit_code & 0xFFu) << 8;
+                proc->wait_reaped = 1;
+                process_release_resources(proc);
+                proc->state = PROC_UNUSED;
+                return proc->pid;
+            }
+        }
+        if (!found_child) return LINUX_ECHILD;
+        if (options & 1) return 0;
+
+        if (parent_pid >= 0 && parent_pid < MAX_PROCESSES) {
+            process_block_current(PROC_WAIT_CHILD, 0u);
+        } else {
+            return 0;
+        }
+    }
 }
 
 // Voluntarily yield CPU
@@ -477,9 +557,20 @@ int process_kill(int pid) {
     PCB* proc = &process_table[pid];
     if (proc->state == PROC_UNUSED) return -2;
     if (proc->state == PROC_EXITED) return 0;
+    proc->exit_code = 128u + (unsigned int)LINUX_SIGTERM;
+    proc->wait_reaped = 0;
     proc->pending_signals |= SIGNAL_MASK(LINUX_SIGTERM);
     if (pid != current_process) {
         proc->state = PROC_EXITED;
+        if (proc->parent_pid >= 0 && proc->parent_pid < MAX_PROCESSES) {
+            PCB* parent = &process_table[proc->parent_pid];
+            if (parent->state == PROC_BLOCKED &&
+                parent->block_reason == PROC_WAIT_CHILD) {
+                parent->block_reason = 0;
+                parent->block_arg = 0;
+                parent->state = PROC_READY;
+            }
+        }
         process_release_resources(proc);
     }
     if (pid == current_process) {
@@ -500,12 +591,12 @@ static void process_demo_entry(void) {
         if (proc->regs[1] > 0 && proc->regs[0] >= proc->regs[1]) {
             break;
         }
-        process_yield();
+        process_block_current(PROC_WAIT_TIMER, (unsigned int)ticks + 18u);
     }
 }
 
 int process_spawn_demo(void) {
-    return process_spawn_demo_with_work(200);
+    return process_spawn_demo_with_work(0);
 }
 
 int process_spawn_demo_with_work(unsigned int work_ticks) {
@@ -594,6 +685,7 @@ int process_get_demo_autorespawn(void) {
 // context_switch_asm cannot safely run inside the IRQ pusha/popa wrapper.
 void process_maintenance_tick(void) {
     process_reap_exited();
+    process_wake_waiting(PROC_WAIT_TIMER);
     if (!demo_autorespawn) return;
     if (is_demo_process_active()) return;
     process_spawn_demo();

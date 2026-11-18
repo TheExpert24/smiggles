@@ -3173,6 +3173,8 @@ static void handle_proctest_command(char* video, int* cursor) {
     int total = 0;
     int passed = 0;
     int pid = -1;
+    unsigned int wait_status = 0;
+    int wait_result = -1;
     unsigned int before_ticks = 0;
     unsigned int after_ticks = 0;
     unsigned int before_run_ticks = 0;
@@ -3239,6 +3241,30 @@ static void handle_proctest_command(char* video, int* cursor) {
         print_string("proctest: process exit state recorded PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
     } else {
         print_string("proctest: process exit state recorded FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (pid >= 0) {
+        wait_result = process_waitpid(pid, &wait_status, 1);
+        if (wait_result == pid &&
+            (wait_status & 0xFF00u) == ((128u + (unsigned int)LINUX_SIGTERM) << 8)) {
+            passed++;
+            print_string("proctest: waitpid status PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+        } else {
+            print_string("proctest: waitpid status FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+        }
+    } else {
+        print_string("proctest: waitpid status FAIL (spawn step failed)", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    if (pid >= 0 && pid < MAX_PROCESSES &&
+        process_table[pid].state == PROC_UNUSED &&
+        process_table[pid].wait_reaped) {
+        passed++;
+        print_string("proctest: waitpid reap PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("proctest: waitpid reap FAIL", -1, video, cursor, COLOR_LIGHT_RED);
     }
 
     total++;

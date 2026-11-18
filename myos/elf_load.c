@@ -10,6 +10,9 @@
 #define PF_X 0x1u
 #define PF_W 0x2u
 #define PF_R 0x4u
+#define ELF_MAX_IMAGE_SIZE (1024u * 1024u)
+#define ELF_MIN_USER_ADDRESS (1u * 1024u * 1024u)
+#define ELF_MAX_USER_ADDRESS (16u * 1024u * 1024u)
 
 typedef struct {
     unsigned char e_ident[16];
@@ -73,7 +76,7 @@ static int read_entire_file(const char* path, unsigned char* out, int max_len, i
 int elf_load(const char* path, PCB* proc) {
     if (!path || !proc) return -1;
 
-    static unsigned char elf_image[64 * 1024];
+    static unsigned char elf_image[ELF_MAX_IMAGE_SIZE];
     int elf_len = 0;
     if (read_entire_file(path, elf_image, (int)sizeof(elf_image), &elf_len) != 0) {
         return -2;
@@ -100,7 +103,9 @@ int elf_load(const char* path, PCB* proc) {
 
         // This kernel currently uses identity mapping in low memory.
         // Reject high virtual addresses that are not mapped.
-        if (ph->p_vaddr >= (16u * 1024u * 1024u)) return -11;
+        if (ph->p_vaddr < ELF_MIN_USER_ADDRESS) return -11;
+        if (ph->p_vaddr >= ELF_MAX_USER_ADDRESS) return -11;
+        if (ph->p_memsz > ELF_MAX_USER_ADDRESS - ph->p_vaddr) return -11;
 
         elf_memset((void*)(uintptr_t)ph->p_vaddr, 0, ph->p_memsz);
         if (ph->p_filesz > 0u) {
