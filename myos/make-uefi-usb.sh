@@ -5,7 +5,7 @@ output_image="${1:?output image is required}"
 kernel="${2:?kernel path is required}"
 grub_mkimage="${3:?grub-mkimage path is required}"
 grub_root="$(dirname "$grub_mkimage")"
-grub_efi_mod_dir="$grub_root/x86_64-efi"
+grub_efi_mod_dir="${GRUB_EFI_MOD_DIR:-}"
 mformat="${GRUB_MFORMAT:-mformat}"
 mmd="${GRUB_MMD:-mmd}"
 mcopy="${GRUB_MCOPY:-mcopy}"
@@ -22,6 +22,35 @@ for tool in "$grub_mkimage" "$mformat" "$mmd" "$mcopy"; do
     exit 1
   fi
 done
+
+if [ -z "$grub_efi_mod_dir" ]; then
+  for candidate in \
+    "$grub_root/x86_64-efi" \
+    "$(dirname "$grub_root")/lib/x86_64-elf/grub/x86_64-efi" \
+    "$(dirname "$grub_root")/lib/grub/x86_64-efi"; do
+    if [ -d "$candidate" ]; then
+      grub_efi_mod_dir="$candidate"
+      break
+    fi
+  done
+fi
+
+if [ -z "$grub_efi_mod_dir" ] && command -v brew >/dev/null 2>&1; then
+  for formula in x86_64-elf-grub i686-elf-grub grub; do
+    brew_prefix="$(brew --prefix "$formula" 2>/dev/null || true)"
+    if [ -n "$brew_prefix" ]; then
+      for candidate in \
+        "$brew_prefix/lib/x86_64-elf/grub/x86_64-efi" \
+        "$brew_prefix/lib/grub/x86_64-efi" \
+        "$brew_prefix/share/grub/x86_64-efi"; do
+        if [ -d "$candidate" ]; then
+          grub_efi_mod_dir="$candidate"
+          break 2
+        fi
+      done
+    fi
+  done
+fi
 
 if [ ! -d "$grub_efi_mod_dir" ]; then
   echo "GRUB EFI modules not found: $grub_efi_mod_dir" >&2
@@ -56,6 +85,7 @@ boot
 EOF
 
 "$grub_mkimage" -O x86_64-efi \
+  -d "$grub_efi_mod_dir" \
   -o "$stage_dir/EFI/BOOT/BOOTX64.EFI" \
   -p /boot/grub \
   -c "$stage_dir/early.cfg" \

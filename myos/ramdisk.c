@@ -24,21 +24,3 @@ static int ramdisk_write(unsigned int lba, const void* buffer) {
     for (unsigned int i = 0; i < RAMDISK_SECTOR_SIZE; i++) destination[i] = source[i];
     return 0;
 }
-
-int disk_read_sector(unsigned int lba, void* buffer) {
-    if (!ramdisk_valid(lba, buffer)) return -2;
-    if (ramdisk_active) return ramdisk_read(lba, buffer);
-
-    if (ata_read_sector(lba, buffer) == 0) return 0;
-    ramdisk_active = 1;
-    return ramdisk_read(lba, buffer);
-}
-
-int disk_write_sector(unsigned int lba, const void* buffer) {
-    if (!ramdisk_valid(lba, buffer)) return -2;
-    if (ramdisk_active) return ramdisk_write(lba, buffer);
-
-    if (ata_write_sector(lba, buffer) == 0) return 0;
-    ramdisk_active = 1;
-    return ramdisk_write(lba, buffer);
-}
