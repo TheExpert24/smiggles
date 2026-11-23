@@ -9,10 +9,12 @@ extern int fs_fd_open(const char* path, int flags);
 extern int fs_fd_close(int fd);
 extern int fs_fd_read(int fd, char* buffer, int count);
 extern int fs_fd_write(int fd, const char* buffer, int count);
-extern int fs_fd_seek(int fd, uint32_t offset, int whence);
+extern int fs_fd_seek(int fd, int offset, int whence);
+extern int fs_fd_stat(int fd, FInode* stat_out);
 extern int newfs_readdir(const char* path, DirectoryEntry* entries, int max_entries);
 extern int newfs_mkdir(const char* path);
 extern int newfs_unlink(const char* path);
+extern int inode_rename(const char* old_path, const char* new_path);
 extern int newfs_stat(const char* path, FInode* stat_out);
 
 extern int disk_fs_init(void);
@@ -774,6 +776,53 @@ int vfs_write(int fd, const char* buf, int count) {
     VFS_Operations* ops = vfs_mounts[mount_idx].ops;
     if (!ops || !ops->write) return -3;
     return ops->write(backend_fd, buf, count);
+}
+
+int vfs_seek(int fd, int offset, int whence) {
+    if (!vfs_fd_valid(fd)) return -1;
+
+    int mount_idx = vfs_open_files[fd].mount_idx;
+    int backend_fd = vfs_open_files[fd].backend_fd;
+    if (mount_idx < 0 || mount_idx >= MAX_VFS_MOUNTS ||
+        !vfs_mounts[mount_idx].used) return -2;
+
+    VFS_Mount* mount = &vfs_mounts[mount_idx];
+    if (!mount->ops || my_strcmp(mount->mount_point, "/") != 0) {
+        return -3;
+    }
+    return fs_fd_seek(backend_fd, offset, whence);
+}
+
+int vfs_fstat(int fd, FInode* stat_out) {
+    if (!vfs_fd_valid(fd) || !stat_out) return -1;
+
+    int mount_idx = vfs_open_files[fd].mount_idx;
+    int backend_fd = vfs_open_files[fd].backend_fd;
+    if (mount_idx < 0 || mount_idx >= MAX_VFS_MOUNTS ||
+        !vfs_mounts[mount_idx].used) return -2;
+
+    VFS_Mount* mount = &vfs_mounts[mount_idx];
+    if (!mount->ops || my_strcmp(mount->mount_point, "/") != 0) return -3;
+    return fs_fd_stat(backend_fd, stat_out);
+}
+
+int vfs_rename(const char* old_path, const char* new_path) {
+    if (!old_path || !new_path) return -1;
+
+    char old_normalized[256];
+    char new_normalized[256];
+    if (!fs_path_normalize(old_path, old_normalized, (int)sizeof(old_normalized)) ||
+        !fs_path_normalize(new_path, new_normalized, (int)sizeof(new_normalized))) {
+        return -1;
+    }
+
+    int old_mount = vfs_find_mount(old_normalized);
+    int new_mount = vfs_find_mount(new_normalized);
+    if (old_mount < 0 || old_mount != new_mount) return -2;
+
+    VFS_Mount* mount = &vfs_mounts[old_mount];
+    if (!mount->ops || my_strcmp(mount->mount_point, "/") != 0) return -3;
+    return inode_rename(old_normalized, new_normalized);
 }
 
 static void vfs_fill_dirent(DirectoryEntry* de,

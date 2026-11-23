@@ -603,3 +603,40 @@ int inode_delete_file(const char* path) {
     
     return 0;
 }
+
+int inode_rename(const char* old_path, const char* new_path) {
+    if (!old_path || !new_path) return -1;
+
+    FInode source_inode;
+    int inode_num = path_resolve(old_path, &source_inode);
+    if (inode_num < 0) return -1;
+
+    char old_name[256];
+    FInode old_parent;
+    int old_parent_num = path_resolve_parent(old_path, old_name, &old_parent);
+    if (old_parent_num < 0) return -1;
+
+    char new_name[256];
+    FInode new_parent;
+    int new_parent_num = path_resolve_parent(new_path, new_name, &new_parent);
+    if (new_parent_num < 0) return -1;
+
+    FInode existing;
+    int existing_num = path_resolve(new_path, &existing);
+    if (existing_num >= 0) {
+        if (existing.mode & INODE_MODE_DIR) return -1;
+        if (inode_delete_file(new_path) != 0) return -1;
+    }
+
+    uint8_t file_type = (source_inode.mode & INODE_MODE_DIR) ?
+                        DIRENT_TYPE_DIR : DIRENT_TYPE_FILE;
+    if (inode_add_entry(new_parent_num, new_name,
+                        (uint32_t)inode_num, file_type) != 0) {
+        return -1;
+    }
+    if (inode_remove_entry(old_parent_num, old_name) != 0) {
+        inode_remove_entry(new_parent_num, new_name);
+        return -1;
+    }
+    return 0;
+}

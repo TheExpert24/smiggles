@@ -3123,11 +3123,73 @@ static void handle_pathtest_command(char* video, int* cursor) {
     }
 
     total++;
+    {
+        FInode inode;
+        if (vfs_stat(canonical_path, &inode) >= 0 &&
+            inode.size == (uint32_t)str_len(payload)) {
+            passed++;
+            print_string("pathtest: stat inode size PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+        } else {
+            print_string("pathtest: stat inode size FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+        }
+    }
+
+    total++;
+    {
+        fd = vfs_open(canonical_path, FS_O_READ);
+        if (fd >= 0) {
+            FInode inode;
+            int pos = vfs_seek(fd, 5, 0);
+            int seek_ok = pos == 5;
+            int stat_ok = vfs_fstat(fd, &inode) >= 0 &&
+                          inode.size == (uint32_t)str_len(payload);
+            vfs_close(fd);
+            fd = -1;
+            if (seek_ok && stat_ok) {
+                passed++;
+                print_string("pathtest: seek and fstat PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+            } else {
+                print_string("pathtest: seek and fstat FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+            }
+        } else {
+            print_string("pathtest: seek and fstat FAIL (open step failed)", -1, video, cursor, COLOR_LIGHT_RED);
+        }
+    }
+
+    total++;
     if (vfs_unlink(canonical_path) == 0) {
         passed++;
         print_string("pathtest: unlink test file PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
     } else {
         print_string("pathtest: unlink test file FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    {
+        fd = vfs_open("/pathtest_old", FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+        int rename_ok = 0;
+        if (fd >= 0) {
+            if (vfs_write(fd, "rename", 6) == 6) {
+                vfs_close(fd);
+                fd = -1;
+                if (vfs_rename("/pathtest_old", "/pathtest_new") == 0 &&
+                    vfs_stat("/pathtest_old", &(FInode){0}) < 0 &&
+                    vfs_stat("/pathtest_new", &(FInode){0}) >= 0) {
+                    rename_ok = 1;
+                }
+            } else {
+                vfs_close(fd);
+                fd = -1;
+            }
+        }
+        (void)vfs_unlink("/pathtest_old");
+        (void)vfs_unlink("/pathtest_new");
+        if (rename_ok) {
+            passed++;
+            print_string("pathtest: rename PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+        } else {
+            print_string("pathtest: rename FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+        }
     }
 
     total++;
@@ -3149,6 +3211,14 @@ static void handle_pathtest_command(char* video, int* cursor) {
             (void)vfs_unlink(long_path);
             print_string("pathtest: overlong name rejection FAIL", -1, video, cursor, COLOR_LIGHT_RED);
         }
+    }
+
+    total++;
+    if (disk_fs_flush() == 0) {
+        passed++;
+        print_string("pathtest: fsync/flush PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("pathtest: fsync/flush FAIL", -1, video, cursor, COLOR_LIGHT_RED);
     }
 
     summary[0] = 0;
@@ -3180,6 +3250,9 @@ static void handle_proctest_command(char* video, int* cursor) {
     unsigned int before_run_ticks = 0;
     unsigned int after_run_ticks = 0;
     int kill_result = -1;
+    int stress_spawned = 0;
+    int stress_unused = 0;
+    int stress_pid = -1;
 
     print_string("proctest: running checks...", -1, video, cursor, COLOR_LIGHT_GRAY);
 
@@ -3265,6 +3338,49 @@ static void handle_proctest_command(char* video, int* cursor) {
         print_string("proctest: waitpid reap PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
     } else {
         print_string("proctest: waitpid reap FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    total++;
+    stress_spawned = 0;
+    for (int i = 0; i < 12; i++) {
+        stress_pid = process_spawn_demo_with_work(3u);
+        if (stress_pid >= 0) stress_spawned++;
+    }
+    if (stress_spawned == 12) {
+        passed++;
+        print_string("proctest: repeated spawn PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("proctest: repeated spawn FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    (void)syscall_invoke1(SYS_WAIT_TICKS, 120u);
+
+    stress_unused = 0;
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (process_table[i].state == PROC_UNUSED) stress_unused++;
+    }
+
+    total++;
+    if (stress_spawned == 12 && stress_unused >= 12) {
+        passed++;
+        print_string("proctest: spawn/exit/reap stress PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("proctest: spawn/exit/reap stress FAIL", -1, video, cursor, COLOR_LIGHT_RED);
+    }
+
+    stress_pid = process_spawn_demo_with_work(3u);
+    if (stress_pid >= 0) {
+        (void)syscall_invoke1(SYS_WAIT_TICKS, 120u);
+    }
+
+    total++;
+    if (stress_pid >= 0 &&
+        stress_pid < MAX_PROCESSES &&
+        process_table[stress_pid].state == PROC_UNUSED) {
+        passed++;
+        print_string("proctest: process slot reuse PASS", -1, video, cursor, COLOR_LIGHT_GREEN);
+    } else {
+        print_string("proctest: process slot reuse FAIL", -1, video, cursor, COLOR_LIGHT_RED);
     }
 
     total++;

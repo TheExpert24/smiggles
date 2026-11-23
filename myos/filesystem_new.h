@@ -195,6 +195,10 @@ int vfs_readdir(const char* path, DirectoryEntry* entries, int max_entries);
 int vfs_mkdir(const char* path);
 int vfs_unlink(const char* path);
 int vfs_stat(const char* path, FInode* stat_out);
+int vfs_seek(int fd, int offset, int whence);
+int vfs_fstat(int fd, FInode* stat_out);
+int vfs_rename(const char* old_path, const char* new_path);
+int disk_fs_flush(void);
 void vfs_close_for_pid(int pid);
 
 // ============================================================================

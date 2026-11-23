@@ -85,6 +85,12 @@ typedef struct {
     int in_use;
 } ProcessMMapRegion;
 
+typedef struct {
+    unsigned int addr;
+    unsigned int size;
+    int in_use;
+} ProcessElfRegion;
+
 typedef enum {
     PROC_UNUSED = 0,
     PROC_READY,
@@ -97,6 +103,7 @@ typedef struct {
     int pid;
     ProcessState state;
     char name[16];
+    char cwd[MAX_PATH_LENGTH];
     unsigned int page_directory;
     unsigned int esp;
     unsigned int eip;
@@ -122,6 +129,7 @@ typedef struct {
     unsigned int brk_current;
     unsigned int brk_limit;
     ProcessMMapRegion mmap_regions[MAX_PROCESS_MMAP_REGIONS];
+    ProcessElfRegion elf_regions[MAX_PROCESS_MMAP_REGIONS];
     int fork_context_valid;
     unsigned int fork_edi;
     unsigned int fork_esi;
@@ -156,6 +164,7 @@ typedef struct {
 extern PCB process_table[MAX_PROCESSES];
 extern int current_process;
 void init_process_table(void);
+void linux_close_pipes_for_pid(int pid);
 
 // Create a new process
 int process_create(unsigned int entry_point);
@@ -173,6 +182,8 @@ void process_block_current(unsigned int block_reason, unsigned int block_arg);
 void process_wake_waiting(unsigned int block_reason);
 void process_wake_waiting_with_arg(unsigned int block_reason, unsigned int arg);
 int process_waitpid(int pid, unsigned int* status, int options);
+int process_set_cwd(const char* cwd);
+int process_get_cwd(char* out, unsigned int out_size);
 
 // Voluntarily yield CPU
 void process_yield(void);
@@ -399,6 +410,7 @@ int keyboard_pop_scancode(unsigned char* out_scancode);
 void mouse_init(void);
 void mouse_poll_hardware(void);
 int mouse_poll_state(MouseState* state);
+int keyboard_available(void);
 extern void load_idt(void*);
 extern void irq0_timer_handler();
 extern void irq1_keyboard_handler();
@@ -643,6 +655,9 @@ extern void resume_from_irq_context(IRQContext* ctx);
 // When a ring-3 process calls  int 0x80  with eax = one of these numbers
 // we dispatch through linux_syscall_dispatch() instead of our own table.
 #define LINUX_SYS_EXIT          1
+#define LINUX_SYS_PIPE          42
+#define LINUX_SYS_UNLINK        10
+#define LINUX_SYS_RENAME        38
 #define LINUX_SYS_FORK          2
 #define LINUX_SYS_READ          3
 #define LINUX_SYS_WRITE         4
@@ -650,15 +665,24 @@ extern void resume_from_irq_context(IRQContext* ctx);
 #define LINUX_SYS_CLOSE         6
 #define LINUX_SYS_WAITPID       7
 #define LINUX_SYS_EXECVE        11
+#define LINUX_SYS_CHDIR         12
+#define LINUX_SYS_LSEEK         19
 #define LINUX_SYS_GETPID        20
 #define LINUX_SYS_GETUID        24
 #define LINUX_SYS_GETGID        47
 #define LINUX_SYS_GETEUID       49
 #define LINUX_SYS_GETEGID       50
 #define LINUX_SYS_BRK           45
+#define LINUX_SYS_STAT          106
+#define LINUX_SYS_FSTAT         108
+#define LINUX_SYS_MKDIR         39
+#define LINUX_SYS_RMDIR         40
+#define LINUX_SYS_GETCWD        183
 #define LINUX_SYS_IOCTL         54
+#define LINUX_SYS_FSYNC         118
 #define LINUX_SYS_MMAP          90
 #define LINUX_SYS_MUNMAP        91
+#define LINUX_SYS_POLL          168
 #define LINUX_SYS_UNAME         122
 #define LINUX_SYS_WRITEV        146
 #define LINUX_SYS_EXIT_GROUP    252
@@ -675,13 +699,26 @@ extern void resume_from_irq_context(IRQContext* ctx);
 #define LINUX_ENOMEM    (-12)
 #define LINUX_EFAULT    (-14)
 #define LINUX_EINVAL    (-22)
+#define LINUX_EIO       (-5)
+#define LINUX_EMFILE    (-24)
 #define LINUX_ENOSYS    (-38)
 #define LINUX_ECHILD    (-10)
 #define LINUX_EAGAIN    (-11)
+#define LINUX_EEXIST    (-17)
+#define LINUX_ERANGE    (-34)
+#define LINUX_EPIPE     (-32)
 
 #define PROC_WAIT_KEYBOARD 1u
 #define PROC_WAIT_CHILD    2u
 #define PROC_WAIT_TIMER    3u
+#define PROC_WAIT_PIPE_READ 4u
+#define PROC_WAIT_PIPE_WRITE 5u
+
+#define LINUX_POLLIN  0x0001u
+#define LINUX_POLLPRI 0x0002u
+#define LINUX_POLLOUT 0x0004u
+#define LINUX_POLLERR 0x0008u
+#define LINUX_POLLHUP 0x0010u
 
 // Linux uname() struct (old_utsname layout used by most static binaries)
 typedef struct {

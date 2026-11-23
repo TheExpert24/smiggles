@@ -10,7 +10,8 @@
 #define PF_X 0x1u
 #define PF_W 0x2u
 #define PF_R 0x4u
-#define ELF_MAX_IMAGE_SIZE (1024u * 1024u)
+#define ELF_MAX_IMAGE_SIZE (4u * 1024u * 1024u)
+#define PAGE_SIZE 4096u
 #define ELF_MIN_USER_ADDRESS (1u * 1024u * 1024u)
 #define ELF_MAX_USER_ADDRESS (16u * 1024u * 1024u)
 
@@ -76,52 +77,151 @@ static int read_entire_file(const char* path, unsigned char* out, int max_len, i
 int elf_load(const char* path, PCB* proc) {
     if (!path || !proc) return -1;
 
-    static unsigned char elf_image[ELF_MAX_IMAGE_SIZE];
+    unsigned int image_order = 10u; // 4 MiB maximum image
+    unsigned char* elf_image = (unsigned char*)alloc_pages(image_order);
+    if (!elf_image) return -2;
+
     int elf_len = 0;
-    if (read_entire_file(path, elf_image, (int)sizeof(elf_image), &elf_len) != 0) {
+    if (read_entire_file(path, elf_image, (int)ELF_MAX_IMAGE_SIZE, &elf_len) != 0) {
+        free_pages(elf_image, image_order);
         return -2;
     }
 
-    if (elf_len < (int)sizeof(Elf32_Ehdr)) return -3;
+    if (elf_len < (int)sizeof(Elf32_Ehdr)) {
+        free_pages(elf_image, image_order);
+        return -3;
+    }
     const Elf32_Ehdr* eh = (const Elf32_Ehdr*)elf_image;
 
-    if (*(const uint32_t*)eh->e_ident != ELF_MAGIC) return -4;
-    if (eh->e_ident[4] != ELFCLASS32 || eh->e_ident[5] != ELFDATA2LSB) return -5;
-    if (eh->e_type != ET_EXEC || eh->e_machine != EM_386) return -6;
+    if (*(const uint32_t*)eh->e_ident != ELF_MAGIC) {
+        free_pages(elf_image, image_order);
+        return -4;
+    }
+    if (eh->e_ident[4] != ELFCLASS32 || eh->e_ident[5] != ELFDATA2LSB) {
+        free_pages(elf_image, image_order);
+        return -5;
+    }
+    if (eh->e_type != ET_EXEC || eh->e_machine != EM_386) {
+        free_pages(elf_image, image_order);
+        return -6;
+    }
 
-    if (eh->e_phoff + (uint32_t)eh->e_phnum * (uint32_t)eh->e_phentsize > (uint32_t)elf_len) return -7;
+    if (eh->e_ehsize < sizeof(Elf32_Ehdr) ||
+        eh->e_phentsize < sizeof(Elf32_Phdr) ||
+        eh->e_phnum == 0u) {
+        free_pages(elf_image, image_order);
+        return -7;
+    }
+    if ((uint32_t)eh->e_phnum > 16u ||
+        (uint32_t)eh->e_phentsize > 256u ||
+        eh->e_phoff > (uint32_t)elf_len ||
+        (uint32_t)eh->e_phnum * (uint32_t)eh->e_phentsize >
+            (uint32_t)elf_len - eh->e_phoff) {
+        free_pages(elf_image, image_order);
+        return -7;
+    }
 
     for (uint16_t i = 0; i < eh->e_phnum; i++) {
-        const Elf32_Phdr* ph = (const Elf32_Phdr*)(elf_image + eh->e_phoff + (uint32_t)i * eh->e_phentsize);
+        const Elf32_Phdr* ph = (const Elf32_Phdr*)(elf_image +
+            eh->e_phoff + (uint32_t)i * eh->e_phentsize);
         if (ph->p_type != PT_LOAD) continue;
 
         if (ph->p_memsz == 0u) continue;
-        if (ph->p_filesz > ph->p_memsz) return -8;
-        if (ph->p_offset + ph->p_filesz > (uint32_t)elf_len) return -9;
+        if (ph->p_filesz > ph->p_memsz) goto elf_fail;
+        if (ph->p_offset > (uint32_t)elf_len ||
+            ph->p_filesz > (uint32_t)elf_len - ph->p_offset) goto elf_fail;
+        if (ph->p_vaddr + ph->p_memsz < ph->p_vaddr) goto elf_fail;
+        if (ph->p_vaddr < ELF_MIN_USER_ADDRESS) goto elf_fail;
+        if (ph->p_vaddr >= ELF_MAX_USER_ADDRESS) goto elf_fail;
+        if (ph->p_memsz > ELF_MAX_USER_ADDRESS - ph->p_vaddr) goto elf_fail;
 
-        if (ph->p_vaddr + ph->p_memsz < ph->p_vaddr) return -10;
+        uint32_t page_start = ph->p_vaddr & ~(PAGE_SIZE - 1u);
+        uint32_t page_end = (ph->p_vaddr + ph->p_memsz + PAGE_SIZE - 1u) &
+                            ~(PAGE_SIZE - 1u);
+        if (page_end < page_start) goto elf_fail;
+        unsigned int page_count = (page_end - page_start) / PAGE_SIZE;
 
-        // This kernel currently uses identity mapping in low memory.
-        // Reject high virtual addresses that are not mapped.
-        if (ph->p_vaddr < ELF_MIN_USER_ADDRESS) return -11;
-        if (ph->p_vaddr >= ELF_MAX_USER_ADDRESS) return -11;
-        if (ph->p_memsz > ELF_MAX_USER_ADDRESS - ph->p_vaddr) return -11;
-
-        elf_memset((void*)(uintptr_t)ph->p_vaddr, 0, ph->p_memsz);
-        if (ph->p_filesz > 0u) {
-            elf_memcpy((void*)(uintptr_t)ph->p_vaddr, elf_image + ph->p_offset, ph->p_filesz);
+        int region_slot = -1;
+        for (int r = 0; r < MAX_PROCESS_MMAP_REGIONS; r++) {
+            if (!proc->elf_regions[r].in_use) {
+                region_slot = r;
+                break;
+            }
         }
+        if (region_slot < 0) goto elf_fail;
+        proc->elf_regions[region_slot].in_use = 1;
+        proc->elf_regions[region_slot].addr = page_start;
+        proc->elf_regions[region_slot].size = page_count * PAGE_SIZE;
 
-        if (paging_mark_user_range(proc->page_directory, ph->p_vaddr, ph->p_memsz) != 0) {
-            return -12;
+        unsigned int flags = PAGE_FLAG_PRESENT | PAGE_FLAG_USER;
+        if (ph->p_flags & PF_W) flags |= PAGE_FLAG_RW;
+
+        for (uint32_t vaddr = page_start; vaddr < page_end; vaddr += PAGE_SIZE) {
+            unsigned char* page = (unsigned char*)alloc_page();
+            if (!page) goto elf_fail;
+            elf_memset(page, 0, PAGE_SIZE);
+
+            uint32_t segment_start = ph->p_vaddr;
+            uint32_t segment_end = ph->p_vaddr + ph->p_memsz;
+            uint32_t file_end = ph->p_vaddr + ph->p_filesz;
+            uint32_t copy_start = vaddr > segment_start ? vaddr : segment_start;
+            uint32_t copy_end = vaddr + PAGE_SIZE;
+            if (copy_end > file_end) copy_end = file_end;
+            if (copy_end > segment_end) copy_end = segment_end;
+
+            if (copy_end > copy_start) {
+                uint32_t file_offset = ph->p_offset + (copy_start - ph->p_vaddr);
+                uint32_t copy_len = copy_end - copy_start;
+                if (file_offset <= (uint32_t)elf_len &&
+                    copy_len <= (uint32_t)elf_len - file_offset) {
+                    elf_memcpy(page + (copy_start - vaddr),
+                               elf_image + file_offset,
+                               copy_len);
+                }
+            }
+
+            if (paging_map_page(proc->page_directory, vaddr,
+                                (unsigned int)(uintptr_t)page, flags) != 0) {
+                free_page(page);
+                goto elf_fail;
+            }
         }
-
-        (void)ph->p_flags;
     }
+
+    int entry_mapped = 0;
+    for (uint16_t i = 0; i < eh->e_phnum; i++) {
+        const Elf32_Phdr* ph = (const Elf32_Phdr*)(elf_image +
+            eh->e_phoff + (uint32_t)i * eh->e_phentsize);
+        if (ph->p_type != PT_LOAD || ph->p_memsz == 0u) continue;
+        if (eh->e_entry >= ph->p_vaddr &&
+            eh->e_entry < ph->p_vaddr + ph->p_memsz) {
+            entry_mapped = 1;
+            break;
+        }
+    }
+    if (!entry_mapped) goto elf_fail;
 
     proc->eip = eh->e_entry;
-    if (paging_mark_user_range(proc->page_directory, eh->e_entry, 4096u) != 0) {
-        return -13;
-    }
+    free_pages(elf_image, image_order);
     return 0;
+
+elf_fail:
+    for (int r = 0; r < MAX_PROCESS_MMAP_REGIONS; r++) {
+        if (!proc->elf_regions[r].in_use) continue;
+        unsigned int pages = proc->elf_regions[r].size / PAGE_SIZE;
+        for (unsigned int p = 0; p < pages; p++) {
+            unsigned int vaddr = proc->elf_regions[r].addr + p * PAGE_SIZE;
+            unsigned int phys = 0;
+            unsigned int flags = 0;
+            if (proc->page_directory &&
+                paging_get_mapping(proc->page_directory, vaddr, &phys, &flags) == 0) {
+                free_page((void*)(phys & 0xFFFFF000u));
+            }
+        }
+        proc->elf_regions[r].in_use = 0;
+        proc->elf_regions[r].addr = 0;
+        proc->elf_regions[r].size = 0;
+    }
+    free_pages(elf_image, image_order);
+    return -12;
 }

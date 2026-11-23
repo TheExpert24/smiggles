@@ -413,7 +413,7 @@ int fs_fd_write(int fd, const char* buffer, int count) {
 // Seek Operations
 // ============================================================================
 
-int fs_fd_seek(int fd, uint32_t offset, int whence) {
+int fs_fd_seek(int fd, int offset, int whence) {
     if (!fs_fd_is_valid(fd)) return -1;
     
     FInode inode;
@@ -421,23 +421,27 @@ int fs_fd_seek(int fd, uint32_t offset, int whence) {
         return -2;
     }
     
-    uint32_t new_offset = 0;
+    int new_offset = 0;
     
     switch (whence) {
         case 0:  // SEEK_SET (absolute)
+            if (offset < 0) return -4;
             new_offset = offset;
             break;
         case 1:  // SEEK_CUR (relative to current)
-            new_offset = fd_table[fd].offset + offset;
+            if (offset < 0 && (uint32_t)(-offset) > fd_table[fd].offset) return -4;
+            new_offset = (int)fd_table[fd].offset + offset;
             break;
         case 2:  // SEEK_END (relative to end)
-            new_offset = inode.size + offset;
+            if (offset < 0 && (uint32_t)(-offset) > inode.size) return -4;
+            new_offset = (int)inode.size + offset;
             break;
         default:
             return -3;  // Invalid whence
     }
+    if (new_offset < 0) return -4;
     
-    fd_table[fd].offset = new_offset;
+    fd_table[fd].offset = (uint32_t)new_offset;
     return new_offset;
 }
 
@@ -450,6 +454,12 @@ int fs_stat(const char* path, FInode* stat_out) {
     
     int inode_num = path_resolve(path, stat_out);
     return inode_num;
+}
+
+int fs_fd_stat(int fd, FInode* stat_out) {
+    if (!stat_out || !fs_fd_is_valid(fd)) return -1;
+    if (disk_read_inode(fd_table[fd].inode_num, stat_out) != 0) return -2;
+    return fd_table[fd].inode_num;
 }
 
 int fs_mkdir(const char* path) {
@@ -503,4 +513,5 @@ int newfs_fd_open(const char* path, int flags) { return fs_fd_open(path, flags);
 int newfs_fd_close(int fd) { return fs_fd_close(fd); }
 int newfs_fd_read(int fd, char* buffer, int count) { return fs_fd_read(fd, buffer, count); }
 int newfs_fd_write(int fd, const char* buffer, int count) { return fs_fd_write(fd, buffer, count); }
-int newfs_fd_seek(int fd, uint32_t offset, int whence) { return fs_fd_seek(fd, offset, whence); }
+int newfs_fd_seek(int fd, int offset, int whence) { return fs_fd_seek(fd, offset, whence); }
+int newfs_fd_stat(int fd, FInode* stat_out) { return fs_fd_stat(fd, stat_out); }

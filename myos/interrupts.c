@@ -361,6 +361,10 @@ int keyboard_pop_scancode(unsigned char* out_scancode) {
     return 1;
 }
 
+int keyboard_available(void) {
+    return keyboard_tail != keyboard_head;
+}
+
 void mouse_init(void) {
     unsigned char status = 0;
     unsigned char device_id = 0;

@@ -72,6 +72,7 @@ static void process_reap_exited(void) {
 
 static void process_release_resources(PCB* proc) {
     if (!proc) return;
+    linux_close_pipes_for_pid(proc->pid);
     vfs_close_for_pid(proc->pid);
     fs_fd_close_for_pid(proc->pid);
     process_release_user_mappings(proc);
@@ -108,6 +109,23 @@ static void process_release_resources(PCB* proc) {
 
 static void process_release_user_mappings(PCB* proc) {
     if (!proc) return;
+
+    for (int i = 0; i < MAX_PROCESS_MMAP_REGIONS; i++) {
+        if (!proc->elf_regions[i].in_use) continue;
+        unsigned int pages = proc->elf_regions[i].size / PAGE_SIZE_BYTES;
+        for (unsigned int p = 0; p < pages; p++) {
+            unsigned int vaddr = proc->elf_regions[i].addr + p * PAGE_SIZE_BYTES;
+            unsigned int phys = 0;
+            unsigned int flags = 0;
+            if (proc->page_directory &&
+                paging_get_mapping(proc->page_directory, vaddr, &phys, &flags) == 0) {
+                free_page((void*)(phys & 0xFFFFF000u));
+            }
+        }
+        proc->elf_regions[i].in_use = 0;
+        proc->elf_regions[i].addr = 0;
+        proc->elf_regions[i].size = 0;
+    }
 
     if (proc->brk_base && proc->brk_limit > proc->brk_base) {
         unsigned int bytes = proc->brk_limit - proc->brk_base;
@@ -188,6 +206,7 @@ void init_process_table() {
         process_table[i].pid = i;
         process_table[i].state = PROC_UNUSED;
         process_table[i].name[0] = 0;
+        str_copy(process_table[i].cwd, "/", (int)sizeof(process_table[i].cwd));
         process_table[i].page_directory = 0;
         process_table[i].esp = 0;
         process_table[i].eip = 0;
@@ -230,6 +249,9 @@ void init_process_table() {
             process_table[i].mmap_regions[m].size = 0;
             process_table[i].mmap_regions[m].order = 0;
             process_table[i].mmap_regions[m].in_use = 0;
+            process_table[i].elf_regions[m].addr = 0;
+            process_table[i].elf_regions[m].size = 0;
+            process_table[i].elf_regions[m].in_use = 0;
         }
     }
     current_process = -1;
@@ -245,6 +267,7 @@ int process_create(unsigned int entry_point) {
             process_table[i].pid = i;
             process_table[i].state = PROC_READY;
             process_table[i].name[0] = 0;
+            str_copy(process_table[i].cwd, "/", (int)sizeof(process_table[i].cwd));
             process_table[i].eip = entry_point;
             process_table[i].exit_code = 0;
             process_table[i].wait_reaped = 0;
@@ -325,6 +348,9 @@ int process_create(unsigned int entry_point) {
                 process_table[i].mmap_regions[m].size = 0;
                 process_table[i].mmap_regions[m].order = 0;
                 process_table[i].mmap_regions[m].in_use = 0;
+                process_table[i].elf_regions[m].addr = 0;
+                process_table[i].elf_regions[m].size = 0;
+                process_table[i].elf_regions[m].in_use = 0;
             }
             return i;
         }
@@ -369,7 +395,67 @@ static unsigned int user_linux_int80_1(unsigned int nr, unsigned int a0) {
     return ret;
 }
 
+static unsigned int user_linux_int80_3(unsigned int nr,
+                                        unsigned int a0,
+                                        unsigned int a1,
+                                        unsigned int a2) {
+    unsigned int ret;
+    asm volatile("int $0x80"
+                 : "=a"(ret)
+                 : "a"(nr), "b"(a0), "c"(a1), "d"(a2)
+                 : "memory");
+    return ret;
+}
+
 static void ring3_demo_user_main(void) {
+    int fds[2];
+    struct {
+        int fd;
+        unsigned short events;
+        unsigned short revents;
+    } pollfd;
+    char payload[3];
+    char readback[3];
+
+    payload[0] = 'O';
+    payload[1] = 'K';
+    payload[2] = 0;
+
+    if (user_linux_int80_1(LINUX_SYS_PIPE, (unsigned int)(uintptr_t)fds) != 0u) {
+        user_linux_int80_1(LINUX_SYS_EXIT, 42u);
+    }
+    if (user_linux_int80_3(LINUX_SYS_WRITE,
+                            (unsigned int)fds[1],
+                            (unsigned int)(uintptr_t)payload,
+                            2u) != 2u) {
+        user_linux_int80_1(LINUX_SYS_EXIT, 43u);
+    }
+
+    pollfd.fd = fds[0];
+    pollfd.events = LINUX_POLLIN;
+    pollfd.revents = 0;
+    if (user_linux_int80_3(LINUX_SYS_POLL,
+                            (unsigned int)(uintptr_t)&pollfd,
+                            1u,
+                            100u) != 1u) {
+        user_linux_int80_1(LINUX_SYS_EXIT, 44u);
+    }
+    if ((pollfd.revents & LINUX_POLLIN) == 0u) {
+        user_linux_int80_1(LINUX_SYS_EXIT, 45u);
+    }
+
+    if (user_linux_int80_3(LINUX_SYS_READ,
+                            (unsigned int)fds[0],
+                            (unsigned int)(uintptr_t)readback,
+                            3u) != 2u) {
+        user_linux_int80_1(LINUX_SYS_EXIT, 46u);
+    }
+    if (readback[0] != 'O' || readback[1] != 'K') {
+        user_linux_int80_1(LINUX_SYS_EXIT, 47u);
+    }
+
+    user_linux_int80_1(LINUX_SYS_CLOSE, (unsigned int)fds[0]);
+    user_linux_int80_1(LINUX_SYS_CLOSE, (unsigned int)fds[1]);
     user_linux_int80_1(LINUX_SYS_EXIT, 0u);
     while (1) { }
 }
@@ -547,6 +633,54 @@ int process_waitpid(int pid, unsigned int* status, int options) {
     }
 }
 
+int process_set_cwd(const char* cwd) {
+    if (!cwd) return -1;
+    if (current_process < 0 || current_process >= MAX_PROCESSES) return -1;
+
+    char combined[MAX_PATH_LENGTH];
+    PCB* proc = &process_table[current_process];
+    if (cwd[0] == '/') {
+        if (str_len(cwd) >= (int)sizeof(combined)) return -1;
+        str_copy(combined, cwd, (int)sizeof(combined));
+    } else {
+        if (str_len(cwd) + str_len(proc->cwd) + 2 >= (int)sizeof(combined)) return -1;
+        if (str_equal(proc->cwd, "/")) {
+            combined[0] = '/';
+            combined[1] = 0;
+            str_concat(combined, cwd);
+        } else {
+            str_copy(combined, proc->cwd, (int)sizeof(combined));
+            str_concat(combined, "/");
+            str_concat(combined, cwd);
+        }
+    }
+
+    char normalized[MAX_PATH_LENGTH];
+    if (!fs_path_normalize(combined, normalized, (int)sizeof(normalized))) return -1;
+
+    FInode inode;
+    if (vfs_stat(normalized, &inode) < 0) return -2;
+    if (!(inode.mode & INODE_MODE_DIR)) return -3;
+
+    str_copy(proc->cwd, normalized, (int)sizeof(proc->cwd));
+    return 0;
+}
+
+int process_get_cwd(char* out, unsigned int out_size) {
+    if (!out || out_size == 0) return -1;
+    if (current_process < 0 || current_process >= MAX_PROCESSES) return -1;
+    PCB* proc = &process_table[current_process];
+    if ((unsigned int)str_len(proc->cwd) + 1u > out_size) return -2;
+
+    unsigned int len = 0;
+    while (len + 1 < out_size && proc->cwd[len]) {
+        out[len] = proc->cwd[len];
+        len++;
+    }
+    out[len] = 0;
+    return (int)len;
+}
+
 // Voluntarily yield CPU
 void process_yield(void) {
     schedule();
@@ -560,21 +694,19 @@ int process_kill(int pid) {
     proc->exit_code = 128u + (unsigned int)LINUX_SIGTERM;
     proc->wait_reaped = 0;
     proc->pending_signals |= SIGNAL_MASK(LINUX_SIGTERM);
-    if (pid != current_process) {
-        proc->state = PROC_EXITED;
-        if (proc->parent_pid >= 0 && proc->parent_pid < MAX_PROCESSES) {
-            PCB* parent = &process_table[proc->parent_pid];
-            if (parent->state == PROC_BLOCKED &&
-                parent->block_reason == PROC_WAIT_CHILD) {
-                parent->block_reason = 0;
-                parent->block_arg = 0;
-                parent->state = PROC_READY;
-            }
+
+    proc->state = PROC_EXITED;
+    if (proc->parent_pid >= 0 && proc->parent_pid < MAX_PROCESSES) {
+        PCB* parent = &process_table[proc->parent_pid];
+        if (parent->state == PROC_BLOCKED &&
+            parent->block_reason == PROC_WAIT_CHILD) {
+            parent->block_reason = 0;
+            parent->block_arg = 0;
+            parent->state = PROC_READY;
         }
-        process_release_resources(proc);
     }
+
     if (pid == current_process) {
-        current_process = -1;
         schedule();
     }
     return 0;
