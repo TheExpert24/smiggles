@@ -1,17 +1,9 @@
 #include "kernel.h"
 
-// ── Linux i386 ABI compatibility layer ───────────────────────────────────────
-// Provides the minimum syscall surface needed to run statically-linked
-// 32-bit Linux ELF binaries once the ELF loader is in place.
-//
-// Register mapping on int 0x80 (matches Linux and our isr_syscall_handler):
-//   eax = syscall number
-//   ebx = arg0,  ecx = arg1,  edx = arg2
-//
-// Errors are returned as small negative integers (-errno), successes ≥ 0.
-// ─────────────────────────────────────────────────────────────────────────────
+// gna be able to run sm 32-bit Linux elf binaries 
+// TODO ELF loader
 
-// Simple memcpy used internally
+
 static void sc_memcpy(void* dst, const void* src, int n) {
     unsigned char* d = (unsigned char*)dst;
     const unsigned char* s = (const unsigned char*)src;
@@ -969,11 +961,6 @@ poll_again:
     return ret;
 }
 
-// ── Our own kernel-internal syscall table ────────────────────────────────────
-// saved_cs is the CS selector that was active when int 0x80 fired.
-// If its RPL bits (bits 1:0) are 3, the caller is a ring-3 (user-mode)
-// process and we dispatch through the Linux ABI compatibility layer.
-// Ring-0 kernel callers go through our own compact syscall table.
 unsigned int syscall_dispatch(unsigned int number,
                               unsigned int arg0,
                               unsigned int arg1,
