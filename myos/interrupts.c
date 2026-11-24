@@ -1,5 +1,10 @@
 #include "kernel.h"
 
+extern void display_get_framebuffer_info(uint32_t* out_width,
+                                         uint32_t* out_height,
+                                         uint32_t* out_pitch,
+                                         uint32_t* out_bpp);
+
 // --- Global Variables ---
 struct IDT_entry idt[256];
 struct IDT_ptr idt_ptr;
@@ -23,6 +28,10 @@ static volatile int mouse_accum_x = 0;
 static volatile int mouse_accum_y = 0;
 static volatile int mouse_scroll_freeze_packets = 0;
 static volatile unsigned char mouse_packet[4];
+static volatile int mouse_x = 512;
+static volatile int mouse_y = 384;
+static volatile unsigned int mouse_buttons = 0;
+static volatile unsigned int mouse_changed_buttons = 0;
 
 #define MOUSE_X_DIVISOR 10
 #define MOUSE_Y_DIVISOR 20
@@ -148,9 +157,28 @@ static void mouse_handle_data_byte(unsigned char data) {
         int wheel = 0;
         int dx = (int)((signed char)mouse_packet[1]);
         int dy = (int)((signed char)mouse_packet[2]);
+        unsigned int buttons = mouse_packet[0] & 0x07u;
+        unsigned int changed = mouse_buttons ^ buttons;
+        mouse_changed_buttons |= changed;
+        mouse_buttons = buttons;
 
         if (mouse_packet_size == 4) {
             wheel = (int)((signed char)mouse_packet[3]);
+        }
+
+        if (wheel == 0) {
+            mouse_x += dx;
+            mouse_y -= dy;
+            uint32_t screen_width = 0;
+            uint32_t screen_height = 0;
+            display_get_framebuffer_info(&screen_width, &screen_height, 0, 0);
+            if (screen_width == 0) screen_width = 1024;
+            if (screen_height == 0) screen_height = 768;
+            if (mouse_x < 0) mouse_x = 0;
+            if ((uint32_t)mouse_x >= screen_width) mouse_x = (int)screen_width - 1;
+            if (mouse_y < 0) mouse_y = 0;
+            if ((uint32_t)mouse_y >= screen_height) mouse_y = (int)screen_height - 1;
+            mouse_dirty = 1;
         }
 
         if (wheel != 0) {
@@ -419,9 +447,14 @@ int mouse_poll_state(MouseState* state) {
 
     state->col = mouse_col;
     state->row = mouse_row;
+    state->x = mouse_x;
+    state->y = mouse_y;
+    state->buttons = mouse_buttons;
+    state->changed_buttons = mouse_changed_buttons;
     state->wheel_delta = mouse_wheel_delta;
 
     mouse_wheel_delta = 0;
+    mouse_changed_buttons = 0;
     mouse_dirty = 0;
     return 1;
 }

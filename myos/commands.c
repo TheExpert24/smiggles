@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "include/display.h"
 #include <stddef.h>
 
 int fs_runtime_ensure_newfs(void);
@@ -5633,6 +5634,8 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
         print_string("PKG usage: pkg repo|search|install|list|remove", -1, video, cursor, COLOR_YELLOW);
     } else if (mini_strcmp(cmd, "about") == 0) {
         handle_command(cmd, video, cursor, "about", "Smiggles OS is a lightweight operating system designed by Jules Miller and Vajra Vanukuri.", COLOR_LIGHT_GRAY);
+    } else if (mini_strcmp(cmd, "gui") == 0) {
+        gui_run_test_window();
     } else if (mini_strcmp(cmd, "help") == 0) {
         print_string(
             "--- Commands ---\n"
@@ -5650,6 +5653,7 @@ static void dispatch_command_internal(const char* cmd, char* video, int* cursor)
             "login - log in\n"
             "reboot - restart\n"
             "halt - shutdown\n"
+            "gui - open the graphical desktop prototype\n"
             "playgif <bgf filename> - plays the gif\n"
             "play <wav filename> - plays the sound of the wav file\n"
             "beep <frequency number> - plays a sound\n"
@@ -6025,7 +6029,7 @@ void handle_tab_completion(char* cmd_buf, int* cmd_len, int* cmd_cursor, char* v
     const char* commands[] = {
         "ls", "cd", "pwd", "cat", "mkdir", "rmdir", "rm", "touch", "cp", "mv",
         "echo", "edit", "tree", "grep", "clear", "cls", "help", "time", "ping", "exec",
-        "udp", "tcp", "net", "sock", "udpecho", "pkg", "about", "ver", "panic", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "log", "dmesg", "filesize", "neofetch", "basic", "syscalltest", "nettest", "memtest", "pathtest", "proctest", "fdtest", "spawn", "ps", "kill", "wait", "savedir"
+        "udp", "tcp", "net", "sock", "udpecho", "pkg", "about", "ver", "panic", "halt", "reboot", "history", "df", "fscheck", "free", "uptime", "log", "dmesg", "filesize", "neofetch", "basic", "syscalltest", "nettest", "memtest", "pathtest", "proctest", "fdtest", "spawn", "ps", "kill", "wait", "savedir", "gui"
     };
     int cmd_count = (int)(sizeof(commands) / sizeof(commands[0]));
     

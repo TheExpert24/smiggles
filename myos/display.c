@@ -48,6 +48,7 @@ static uint8_t green_mask = 0;
 static uint8_t blue_position = 0;
 static uint8_t blue_mask = 0;
 static char text_shadow[SCREEN_BYTES];
+static uint32_t gui_backbuffer[1024u * 768u];
 
 static const uint8_t font8x8_basic[128][8] = {
     { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0000 (nul)
@@ -203,6 +204,76 @@ static void framebuffer_pixel(uint32_t x, uint32_t y, uint32_t rgb) {
         pixel[0] = (uint8_t)(packed & 0xFF);
         pixel[1] = (uint8_t)((packed >> 8) & 0xFF);
         pixel[2] = (uint8_t)((packed >> 16) & 0xFF);
+    }
+}
+
+void display_get_framebuffer_info(uint32_t* out_width,
+                                  uint32_t* out_height,
+                                  uint32_t* out_pitch,
+                                  uint32_t* out_bpp) {
+    if (out_width) *out_width = framebuffer_width;
+    if (out_height) *out_height = framebuffer_height;
+    if (out_pitch) *out_pitch = framebuffer_pitch;
+    if (out_bpp) *out_bpp = framebuffer_bpp;
+}
+
+void display_draw_pixel(uint32_t x, uint32_t y, uint32_t rgb) {
+    if (x >= framebuffer_width || y >= framebuffer_height) return;
+    gui_backbuffer[y * 1024u + x] = rgb;
+}
+
+void display_draw_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t height, uint32_t rgb) {
+    for (uint32_t py = y; py < y + height; py++) {
+        for (uint32_t px = x; px < x + width; px++) {
+            display_draw_pixel(px, py, rgb);
+        }
+    }
+}
+
+void display_draw_line(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, uint32_t rgb) {
+    int ix0 = (int)x0;
+    int iy0 = (int)y0;
+    int ix1 = (int)x1;
+    int iy1 = (int)y1;
+    int dx = ix1 >= ix0 ? ix1 - ix0 : ix0 - ix1;
+    int sx = ix0 < ix1 ? 1 : -1;
+    int dy = iy1 >= iy0 ? -(iy1 - iy0) : -(iy0 - iy1);
+    int sy = iy0 < iy1 ? 1 : -1;
+    int error = dx + dy;
+
+    while (1) {
+        if (ix0 >= 0 && iy0 >= 0) {
+            display_draw_pixel((uint32_t)ix0, (uint32_t)iy0, rgb);
+        }
+        if (ix0 == ix1 && iy0 == iy1) break;
+        int twice_error = 2 * error;
+        if (twice_error >= dy) {
+            error += dy;
+            ix0 += sx;
+        }
+        if (twice_error <= dx) {
+            error += dx;
+            iy0 += sy;
+        }
+    }
+}
+
+void display_present_framebuffer(void) {
+    if (!framebuffer) return;
+    for (uint32_t y = 0; y < framebuffer_height; y++) {
+        for (uint32_t x = 0; x < framebuffer_width; x++) {
+            framebuffer_pixel(x, y, gui_backbuffer[y * 1024u + x]);
+        }
+    }
+}
+
+void display_clear_framebuffer(void) {
+    if (!framebuffer) return;
+    for (uint32_t y = 0; y < framebuffer_height; y++) {
+        uint8_t* row = framebuffer + y * framebuffer_pitch;
+        for (uint32_t i = 0; i < framebuffer_pitch; i++) {
+            row[i] = 0;
+        }
     }
 }
 

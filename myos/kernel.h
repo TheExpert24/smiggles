@@ -260,6 +260,10 @@ extern char tab_matches[32][32];
 typedef struct {
     int col;
     int row;
+    int x;
+    int y;
+    unsigned int buttons;
+    unsigned int changed_buttons;
     int wheel_delta;
 } MouseState;
 

@@ -48,7 +48,7 @@ endif
 C_SOURCES = \
 	kernel.c interrupts.c memory.c \
 	filesystem_disk.c filesystem_inode.c filesystem_fileio.c filesystem_vfs.c filesystem_path.c strings.c \
-	display.c calculator.c basic.c editor.c commands.c clipboard.c \
+	display.c gui.c calculator.c basic.c editor.c commands.c clipboard.c \
 	diskio.c ramdisk.c ata.c process.c syscall.c protection.c \
 	elf_load.c \
 	pci.c rtl8139.c arp.c ipv4.c icmp.c udp.c net.c \
@@ -80,7 +80,7 @@ kernel.elf: $(OBJS) linker.ld
 
 iso/boot/grub/grub.cfg:
 	mkdir -p iso/boot/grub
-	printf 'set timeout=0\nset default=0\nset gfxmode=text\nset gfxpayload=text\nterminal_input console\nterminal_output console\ninsmod multiboot2\nmultiboot2 /boot/kernel.elf vga\nboot\n' > $@
+	printf 'set timeout=0\nset default=0\nset gfxmode=1024x768x32\nset gfxpayload=keep\nterminal_input console\nterminal_output console\ninsmod multiboot2\nmultiboot2 /boot/kernel.elf\nboot\n' > $@
 
 smiggles.iso: kernel-bios.elf iso/boot/grub/grub.cfg
 	$(call check_tool,$(GRUB_MKRESCUE),grub-mkrescue / i686-elf-grub-mkrescue,GRUB_MKRESCUE)
