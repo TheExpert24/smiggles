@@ -16,7 +16,9 @@ SECTIONS
     .rodata ALIGN(4096) : { *(.rodata) }
 
     .data ALIGN(4096) : { *(.data) }
-
+    .dma ALIGN(131072) (NOLOAD) : {
+        *(.dma)
+    }
     .bss ALIGN(4096) : {
         __bss_start = .;
         *(.bss)

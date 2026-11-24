@@ -5,10 +5,10 @@ ifeq ($(OS),Windows_NT)
 	QEMU_RUN := "$(QEMU)"
 	NETDEV := -netdev user,id=net0
 else
-	QEMU := /opt/homebrew/bin/qemu-system-i386
-	AUDIODEV := coreaudio
-	QEMU_RUN := sudo "$(QEMU)"
-	NETDEV := -netdev vmnet-bridged,id=net0,ifname=en0
+	QEMU := /usr/bin/qemu-system-i386
+	AUDIODEV := pipewire
+	QEMU_RUN := "$(QEMU)"
+	NETDEV := -netdev user,id=net0
 endif
 
 .PHONY: all run clean

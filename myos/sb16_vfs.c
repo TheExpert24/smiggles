@@ -5,7 +5,7 @@
 #define SB_DSP_WRITE  0x22C
 #define SB_DSP_STATUS 0x22C
 
-static __attribute__((aligned(4096))) uint8_t dma_buffer[16384];
+static __attribute__((section(".dma"), aligned(131072))) uint8_t dma_buffer[16384];
 static uint8_t ring_buffer[65536];
 static volatile uint32_t ring_head = 0;
 static volatile uint32_t ring_tail = 0;
@@ -15,9 +15,15 @@ static int current_buffer_half = 0;
 static uint32_t current_sample_rate = 8000;
 static uint32_t current_byte_rate = 8000;
 
-static void sb16_write_dsp(uint8_t val) {
-    while (inb(SB_DSP_STATUS) & 0x80);
-    outb(SB_DSP_WRITE, val);
+static int sb16_write_dsp(uint8_t val) {
+    for (uint32_t i = 0; i < 1000000; i++) {
+        if (!(inb(SB_DSP_STATUS) & 0x80)) {
+            outb(SB_DSP_WRITE, val);
+            return 0;
+        }
+    }
+
+    return -1;
 }
 
 static void isa_dma_setup_channel5(uint32_t buffer_phys, uint32_t length) {
@@ -25,7 +31,7 @@ static void isa_dma_setup_channel5(uint32_t buffer_phys, uint32_t length) {
     uint32_t count = words - 1;
     outb(0xD4, 0x04 | 1);
     outb(0xD8, 0x00);
-    outb(0xD6, 0x44 | 0x10 | 0x00 | 1);
+    outb(0xD6, 0x44 | 0x00 | 1);
     outb(0xC4, (buffer_phys >> 1) & 0xFF);
     outb(0xC4, ((buffer_phys >> 1) >> 8) & 0xFF);
     outb(0x8B, (buffer_phys >> 16) & 0xFF);
@@ -45,8 +51,8 @@ static int sb16_open(const char* path, int flags) {
         timeout--;
     }
     if (inb(SB_DSP_READ) != 0xAA) return -1;
-    sb16_write_dsp(0xD1);
-    initial_skip_count = 44;
+    if (sb16_write_dsp(0xD1) != 0) return -1;
+    initial_skip_count = 0;
     
     // CRITICAL FIX: Reset all state flags cleanly on every file open
     ring_head = 0;
@@ -64,23 +70,22 @@ static uint32_t sb16_ring_available(void) {
     uint32_t available = (ring_head >= ring_tail) ? (ring_head - ring_tail) : (65536 - ring_tail + ring_head);
     return available;
 }
-
 static void sb16_wait_for_chunk(uint32_t chunk_bytes) {
     uint32_t byte_rate = current_byte_rate;
     if (byte_rate == 0) byte_rate = 8000;
+
     uint32_t wait_ticks = (chunk_bytes * 18u + byte_rate - 1u) / byte_rate;
     if (wait_ticks == 0) wait_ticks = 1;
+
     unsigned int start_ticks = (unsigned int)ticks;
+
     while (((unsigned int)ticks - start_ticks) < wait_ticks) {
-        process_yield();
+        asm volatile("pause");
     }
 }
-
-static void sb16_pump_hardware(void) {
+static int sb16_pump_hardware(void) {
     uint32_t available = sb16_ring_available();
-    if (available < 8192) {
-        return;
-    }
+    if (available < 8192) return 0;
     int target_offset = (current_buffer_half == 0) ? 0 : 8192;
     for (int i = 0; i < 8192; i++) {
         dma_buffer[target_offset + i] = ring_buffer[ring_tail];
@@ -91,18 +96,18 @@ static void sb16_pump_hardware(void) {
     uint32_t active_phys_addr = (uint32_t)dma_buffer + target_offset;
     isa_dma_setup_channel5(active_phys_addr, 8192);
     
-    sb16_write_dsp(0x41);
-    sb16_write_dsp((current_sample_rate >> 8) & 0xFF);
-    sb16_write_dsp(current_sample_rate & 0xFF);
-    
-    sb16_write_dsp(0xB0);
-    sb16_write_dsp(0x10);
-    sb16_write_dsp((4096 - 1) & 0xFF);
-    sb16_write_dsp(((4096 - 1) >> 8) & 0xFF);
+    if (sb16_write_dsp(0x41) != 0) return -1;
+    if (sb16_write_dsp((current_sample_rate >> 8) & 0xFF) != 0) return -1;
+    if (sb16_write_dsp(current_sample_rate & 0xFF) != 0) return -1;
+    if (sb16_write_dsp(0xB0) != 0) return -1;
+    if (sb16_write_dsp(0x10) != 0) return -1;
+    if (sb16_write_dsp(0xFF) != 0) return -1;
+    if (sb16_write_dsp(0x0F) != 0) return -1;
     
     sb16_wait_for_chunk(8192);
 
     current_buffer_half = (current_buffer_half == 0) ? 1 : 0;
+    return 1;
 }
 
 
@@ -134,7 +139,9 @@ static int sb16_write(int backend_fd, const char* buf, int size) {
         playback_active = 1;
     }
     while (playback_active && sb16_ring_available() >= 8192) {
-        sb16_pump_hardware();
+        if (sb16_pump_hardware() < 0) {
+            return -1;
+        }
     }
     return size;
 }
