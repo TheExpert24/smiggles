@@ -8,6 +8,30 @@
 #define GUI_DESKTOP 0x008080
 #define GUI_BLUE 0x000080
 
+static void gui_draw_beveled_rect(int x, int y, int w, int h,
+                                  uint32_t light, uint32_t dark) {
+    display_draw_rect((uint32_t)x, (uint32_t)y,
+                      (uint32_t)w, 1u, light);
+    display_draw_rect((uint32_t)x, (uint32_t)y,
+                      1u, (uint32_t)h, light);
+    display_draw_rect((uint32_t)(x + w - 1), (uint32_t)y,
+                      1u, (uint32_t)h, dark);
+    display_draw_rect((uint32_t)x, (uint32_t)(y + h - 1),
+                      (uint32_t)w, 1u, dark);
+}
+
+static void gui_draw_inset(int x, int y, int w, int h) {
+    gui_draw_beveled_rect(x, y, w, h, GUI_DARK, GUI_LIGHT);
+}
+
+static void gui_draw_button(int x, int y, int w, int h) {
+    display_draw_rect((uint32_t)x, (uint32_t)y,
+                      (uint32_t)w, (uint32_t)h, GUI_GRAY);
+    gui_draw_beveled_rect(x, y, w, h, GUI_LIGHT, GUI_BLACK);
+    gui_draw_beveled_rect(x + 1, y + 1, w - 2, h - 2,
+                          GUI_GRAY, GUI_DARK);
+}
+
 static int gui_rect_contains(int px, int py, int x, int y, int w, int h) {
     return px >= x && py >= y && px < x + w && py < y + h;
 }
@@ -28,31 +52,44 @@ static void gui_draw_window(int wx, int wy, int w, int h,
                             uint32_t screen_width, uint32_t screen_height) {
     display_draw_rect(0u, 0u, screen_width, screen_height, GUI_DESKTOP);
 
+    if (wx + w + 3 < (int)screen_width && wy + h + 3 < (int)screen_height) {
+        display_draw_rect((uint32_t)(wx + 3), (uint32_t)(wy + 3),
+                          (uint32_t)w, (uint32_t)h, 0x404040);
+    }
+
     display_draw_rect((uint32_t)wx, (uint32_t)wy,
                       (uint32_t)w, (uint32_t)h, GUI_GRAY);
-    display_draw_rect((uint32_t)wx, (uint32_t)wy,
-                      (uint32_t)w, 22u, GUI_BLUE);
+    gui_draw_beveled_rect(wx, wy, w, h, GUI_LIGHT, GUI_BLACK);
+    gui_draw_beveled_rect(wx + 2, wy + 2, w - 4, h - 4,
+                          GUI_LIGHT, GUI_DARK);
 
-    display_draw_rect((uint32_t)(wx + w - 20), (uint32_t)(wy + 4),
-                      16u, 14u, GUI_GRAY);
-    display_draw_rect((uint32_t)(wx + w - 19), (uint32_t)(wy + 5),
-                      14u, 12u, GUI_LIGHT);
-    display_draw_line((uint32_t)(wx + w - 16), (uint32_t)(wy + 8),
-                      (uint32_t)(wx + w - 8), (uint32_t)(wy + 14), GUI_BLACK);
-    display_draw_line((uint32_t)(wx + w - 8), (uint32_t)(wy + 8),
-                      (uint32_t)(wx + w - 16), (uint32_t)(wy + 14), GUI_BLACK);
+    display_draw_rect((uint32_t)(wx + 4), (uint32_t)(wy + 4),
+                      (uint32_t)(w - 8), 18u, GUI_BLUE);
+    display_draw_text((uint32_t)(wx + 8), (uint32_t)(wy + 5),
+                      "Smiggles", GUI_LIGHT);
 
-    display_draw_rect((uint32_t)(wx + 8), (uint32_t)(wy + 34),
-                      (uint32_t)(w - 16), (uint32_t)(h - 42), 0xF4F4F4);
+    int close_x = wx + w - 20;
+    gui_draw_button(close_x, wy + 4, 16, 14);
+    display_draw_line((uint32_t)(close_x + 4), (uint32_t)(wy + 8),
+                      (uint32_t)(close_x + 11), (uint32_t)(wy + 11), GUI_BLACK);
+    display_draw_line((uint32_t)(close_x + 11), (uint32_t)(wy + 8),
+                      (uint32_t)(close_x + 4), (uint32_t)(wy + 11), GUI_BLACK);
+
+    gui_draw_inset(wx + 8, wy + 34, w - 16, h - 42);
+    display_draw_rect((uint32_t)(wx + 9), (uint32_t)(wy + 35),
+                      (uint32_t)(w - 18), (uint32_t)(h - 44), 0xF4F4F4);
+
     display_draw_rect((uint32_t)(wx + 16), (uint32_t)(wy + 42),
                       (uint32_t)(w - 32), 2u, GUI_DARK);
     display_draw_rect((uint32_t)(wx + 16), (uint32_t)(wy + 52),
                       (uint32_t)(w - 32), 2u, GUI_DARK);
 
-    display_draw_rect((uint32_t)(wx + 16), (uint32_t)(wy + h - 34),
-                      96u, 20u, GUI_GRAY);
-    display_draw_rect((uint32_t)(wx + 116), (uint32_t)(wy + h - 34),
-                      96u, 20u, GUI_GRAY);
+    gui_draw_button(wx + 16, wy + h - 34, 96, 20);
+    gui_draw_button(wx + 116, wy + h - 34, 96, 20);
+    display_draw_text((uint32_t)(wx + 38), (uint32_t)(wy + h - 30),
+                      "OK", GUI_BLACK);
+    display_draw_text((uint32_t)(wx + 128), (uint32_t)(wy + h - 30),
+                      "Cancel", GUI_BLACK);
 }
 
 void gui_run_test_window(void) {

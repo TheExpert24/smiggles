@@ -277,6 +277,27 @@ void display_clear_framebuffer(void) {
     }
 }
 
+void display_draw_text(uint32_t x, uint32_t y, const char* text, uint32_t rgb) {
+    if (!text) return;
+
+    uint32_t px = x;
+    for (const char* p = text; *p; p++) {
+        uint8_t c = (uint8_t)*p;
+        if (c >= 128) c = '?';
+
+        for (uint32_t gy = 0; gy < 8; gy++) {
+            uint8_t bits = font8x8_basic[c][gy];
+            for (uint32_t gx = 0; gx < 8; gx++) {
+                if (bits & (1u << gx)) {
+                    display_draw_pixel(px + gx, y + gy * 2u, rgb);
+                    display_draw_pixel(px + gx, y + gy * 2u + 1u, rgb);
+                }
+            }
+        }
+        px += 9u;
+    }
+}
+
 static void framebuffer_draw_char(uint32_t col, uint32_t row,
                                   char ch, unsigned char color) {
     uint32_t fg = framebuffer_color(color);
