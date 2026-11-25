@@ -147,7 +147,7 @@ def main(argv):
     if len(argv) < 2: return 1
     img_path = Path(argv[1])
     if not img_path.exists(): return 1
-    wav_paths = sorted(Path(".").glob("*.wav"))
+    wav_paths = sorted(Path(".").glob("*.wav")) + sorted(Path("tools").glob("*.wav"))
     if not wav_paths:
         print("No .wav files found to seed.")
         return 0
