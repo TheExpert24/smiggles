@@ -157,16 +157,25 @@ static void mouse_handle_data_byte(unsigned char data) {
         int wheel = 0;
         int dx = (int)((signed char)mouse_packet[1]);
         int dy = (int)((signed char)mouse_packet[2]);
+        if (mouse_packet[0] & 0x40u) {
+            dx = (mouse_packet[0] & 0x10u) ? -255 : 255;
+        }
+        if (mouse_packet[0] & 0x80u) {
+            dy = (mouse_packet[0] & 0x20u) ? -255 : 255;
+        }
         unsigned int buttons = mouse_packet[0] & 0x07u;
         unsigned int changed = mouse_buttons ^ buttons;
         mouse_changed_buttons |= changed;
         mouse_buttons = buttons;
+        if (changed) mouse_dirty = 1;
 
         if (mouse_packet_size == 4) {
             wheel = (int)((signed char)mouse_packet[3]);
         }
 
         if (wheel == 0) {
+            int old_x = mouse_x;
+            int old_y = mouse_y;
             mouse_x += dx;
             mouse_y -= dy;
             uint32_t screen_width = 0;
@@ -178,6 +187,13 @@ static void mouse_handle_data_byte(unsigned char data) {
             if ((uint32_t)mouse_x >= screen_width) mouse_x = (int)screen_width - 1;
             if (mouse_y < 0) mouse_y = 0;
             if ((uint32_t)mouse_y >= screen_height) mouse_y = (int)screen_height - 1;
+            if ((old_x != mouse_x && (mouse_x == 0 ||
+                                      (uint32_t)mouse_x == screen_width - 1u)) ||
+                (old_y != mouse_y && (mouse_y == 0 ||
+                                      (uint32_t)mouse_y == screen_height - 1u))) {
+                mouse_accum_x = 0;
+                mouse_accum_y = 0;
+            }
             mouse_dirty = 1;
         }
 
@@ -432,18 +448,15 @@ void mouse_init(void) {
     mouse_dirty = 1;
 }
 
-void mouse_poll_hardware(void) {
-    for (int i = 0; i < 16; i++) {
-        unsigned char status = inb(0x64);
-        if ((status & 0x01) == 0) break;
-        if ((status & 0x20) == 0) break;
-        mouse_handle_data_byte(inb(0x60));
-    }
-}
-
 int mouse_poll_state(MouseState* state) {
     if (!state) return 0;
-    if (!mouse_dirty && mouse_wheel_delta == 0) return 0;
+
+    unsigned int flags;
+    asm volatile("pushfl\n\tpopl %0\n\tcli" : "=r"(flags) : : "memory");
+    if (!mouse_dirty && mouse_wheel_delta == 0) {
+        if (flags & 0x200u) asm volatile("sti" : : : "memory");
+        return 0;
+    }
 
     state->col = mouse_col;
     state->row = mouse_row;
@@ -456,5 +469,6 @@ int mouse_poll_state(MouseState* state) {
     mouse_wheel_delta = 0;
     mouse_changed_buttons = 0;
     mouse_dirty = 0;
+    if (flags & 0x200u) asm volatile("sti" : : : "memory");
     return 1;
 }

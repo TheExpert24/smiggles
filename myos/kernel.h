@@ -412,7 +412,6 @@ void keyboard_handler(void);
 void mouse_handler(void);
 int keyboard_pop_scancode(unsigned char* out_scancode);
 void mouse_init(void);
-void mouse_poll_hardware(void);
 int mouse_poll_state(MouseState* state);
 int keyboard_available(void);
 extern void load_idt(void*);

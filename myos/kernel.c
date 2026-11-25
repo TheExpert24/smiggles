@@ -676,8 +676,6 @@ void kernel_main(unsigned int mb_magic, unsigned int mb_info_addr) {
         MouseState mouse_state;
         unsigned char scancode;
 
-        mouse_poll_hardware();
-
         if (mouse_poll_state(&mouse_state)) {
             display_hide_mouse(video);
             if (mouse_state.wheel_delta != 0) {

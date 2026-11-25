@@ -1,10 +1,8 @@
 # Building Smiggles
 
-First, make sure you've installed all the necessary tools listed in [gettingstarted.md](gettingstarted.md). Clone this repo (TheExpert24/smiggles) into your code editor. In the terminal, run these commands:
+First, make sure you've installed all the necessary tools listed in [gettingstarted.md](gettingstarted.md). Clone this repo (TheExpert24/smiggles) into your code editor. From the repository root, run:
 ```
-> cd myos
-> make clean
-> make
+> make -C myos
 > make run
 ```
 
