@@ -9,9 +9,10 @@
 #define GUI_BLUE 0x000080
 #define GUI_TOPBAR_HEIGHT 48
 #define GUI_MAX_WINDOWS 8
-
+#define GUI_TEXT_CAPACITY 2048
 typedef struct {
     int used;
+    int type;
     int x;
     int y;
     int w;
@@ -24,7 +25,13 @@ typedef struct {
     int z;
     char title[24];
 } GuiWindow;
+typedef struct {
+    char text[GUI_TEXT_CAPACITY];
+    int length;
+    int cursor;
+} GuiDocument;
 
+static GuiDocument documents[GUI_MAX_WINDOWS];
 static void gui_draw_beveled_rect(int x, int y, int w, int h,
                                   uint32_t light, uint32_t dark) {
     display_draw_rect((uint32_t)x, (uint32_t)y,
@@ -94,6 +101,19 @@ static void gui_draw_start_menu(int open) {
                       (uint32_t)(x + w - 4), (uint32_t)(y + 44),
                       GUI_DARK);
 }
+static void gui_draw_applications_menu(int open) {
+    if (!open) return;
+
+    int x = 220;
+    int y = GUI_TOPBAR_HEIGHT;
+    int w = 176;
+    int h = 44;
+
+    display_draw_rect(x, y, w, h, GUI_GRAY);
+    gui_draw_beveled_rect(x, y, w, h, GUI_LIGHT, GUI_BLACK);
+
+    display_draw_text(x + 10, y + 13, "Notepad", GUI_BLACK);
+}
 
 static void gui_draw_cursor(int x, int y) {
     display_draw_rect((uint32_t)x, (uint32_t)y, 12u, 16u, GUI_LIGHT);
@@ -162,7 +182,52 @@ static void gui_draw_window(int wx, int wy, int w, int h,
     display_draw_text((uint32_t)(wx + 128), (uint32_t)(wy + h - 30),
                       "Cancel", GUI_BLACK);
 }
+static void gui_draw_notepad(int wx, int wy, int w, int h,
+                             uint32_t screen_width,
+                             uint32_t screen_height,
+                             GuiDocument* document) {
+    gui_draw_window(wx, wy, w, h, screen_width, screen_height);
+    display_draw_rect((uint32_t)(wx + 9),
+                      (uint32_t)(wy + 35),
+                      (uint32_t)(w - 18),
+                      (uint32_t)(h - 44),
+                      0xFFFFFF);
 
+    int text_x = wx + 14;
+    int text_y = wy + 39;
+    int max_columns = (w - 32) / 9;
+    int max_rows = (h - 52) / 16;
+
+    if (max_columns > 127) max_columns = 127;
+
+    if (max_columns <= 0 || max_rows <= 0) return;
+
+    char line[128];
+    int column = 0;
+    int row = 0;
+
+    for (int i = 0; i <= document->length && row < max_rows; i++) {
+        char c = document->text[i];
+
+        if (c == '\n' || c == '\0' || column >= max_columns) {
+            line[column] = '\0';
+
+            display_draw_text((uint32_t)text_x,
+                              (uint32_t)(text_y + row * 16),
+                              line, GUI_BLACK);
+
+            column = 0;
+            row++;
+
+            if (c == '\0') break;
+            if (c == '\n') continue;
+        }
+
+        if (row < max_rows && c != '\n' && c != '\0') {
+            line[column++] = c;
+        }
+    }
+}
 void gui_run_test_window(void) {
     char* video = display_text_buffer();
     display_hide_mouse(video);
@@ -177,10 +242,16 @@ void gui_run_test_window(void) {
     }
 
     GuiWindow windows[GUI_MAX_WINDOWS];
-    for (int i = 0; i < GUI_MAX_WINDOWS; i++) windows[i].used = 0;
+    for (int i = 0; i < GUI_MAX_WINDOWS; i++) {
+        windows[i].used = 0;
+        documents[i].length = 0;
+        documents[i].cursor = 0;
+        documents[i].text[0] = '\0';
+    }
     int active = 0;
     int next_z = 1;
     windows[0].used = 1;
+    windows[0].type = 0;
     windows[0].x = (int)screen_width / 4;
     windows[0].y = (int)screen_height / 4;
     windows[0].w = 320;
@@ -198,6 +269,8 @@ void gui_run_test_window(void) {
     int resize_start_w = 0;
     int resize_start_h = 0;
     int start_menu_open = 0;
+    int applications_menu_open = 0;
+    int shift = 0;
     int mouse_x = (int)screen_width / 2;
     int mouse_y = (int)screen_height / 2;
 
@@ -210,13 +283,21 @@ void gui_run_test_window(void) {
         for (int z = 1; z < next_z; z++) {
             for (int i = 0; i < GUI_MAX_WINDOWS; i++) {
                 if (windows[i].used && windows[i].z == z) {
-                    gui_draw_window(windows[i].x, windows[i].y,
-                                    windows[i].w, windows[i].h,
-                                    screen_width, screen_height);
+                    if (windows[i].type == 0) {
+                        gui_draw_window(windows[i].x, windows[i].y,
+                            windows[i].w, windows[i].h,
+                            screen_width, screen_height);
+                    } else {
+                        gui_draw_notepad(windows[i].x, windows[i].y,
+                            windows[i].w, windows[i].h,
+                            screen_width, screen_height,
+                            &documents[i]);
+                    }
                 }
             }
         }
         gui_draw_start_menu(start_menu_open);
+        gui_draw_applications_menu(applications_menu_open);
         gui_draw_cursor(mouse_x, mouse_y);
         display_present_framebuffer();
 
@@ -228,25 +309,51 @@ void gui_run_test_window(void) {
                 (mouse.buttons & 1u)) {
                 if (gui_rect_contains(mouse_x, mouse_y, 8, 10, 82, 28)) {
                     start_menu_open = !start_menu_open;
-                } else if (start_menu_open &&
-                           gui_rect_contains(mouse_x, mouse_y, 8,
-                                             GUI_TOPBAR_HEIGHT, 176, 72)) {
-                    if (mouse_y < GUI_TOPBAR_HEIGHT + 38) {
-                        for (int i = 0; i < GUI_MAX_WINDOWS; i++) {
-                            if (!windows[i].used) {
-                                windows[i].used = 1;
-                                windows[i].x = 100 + i * 18;
-                                windows[i].y = 80 + i * 18;
-                                windows[i].w = 320;
-                                windows[i].h = 200;
-                                windows[i].maximized = 0;
-                                windows[i].z = next_z++;
-                                active = i;
-                                break;
-                            }
+                    applications_menu_open = 0;
+                } else if (gui_rect_contains(mouse_x, mouse_y, 224, 10, 126, 28)) {
+                    applications_menu_open = !applications_menu_open;
+                    start_menu_open = 0;
+                } else if (applications_menu_open && gui_rect_contains(mouse_x, mouse_y, 220, GUI_TOPBAR_HEIGHT, 176, 44)) {
+                    for (int i = 0; i < GUI_MAX_WINDOWS; i++) {
+                        if (!windows[i].used) {
+                            windows[i].used = 1;
+                            windows[i].type = 1;
+                            windows[i].x = 100 + i * 18;
+                            windows[i].y = 80 + i * 18;
+                            windows[i].w = 320;
+                            windows[i].h = 200;
+                            windows[i].maximized = 0;
+                            windows[i].z = next_z++;
+                            documents[i].length = 0;
+                            documents[i].cursor = 0;
+                            documents[i].text[0] = '\0';
+                            active = i;
+                            break;
                         }
-                    } else {
-                        break;
+                    }
+                applications_menu_open = 0;
+                } else if (applications_menu_open) {
+                    applications_menu_open = 0;
+                } else if (start_menu_open) {
+                    if (gui_rect_contains(mouse_x, mouse_y, 8,GUI_TOPBAR_HEIGHT, 176, 72)) {
+                        if (mouse_y < GUI_TOPBAR_HEIGHT + 38) {
+                            for (int i = 0; i < GUI_MAX_WINDOWS; i++) {
+                                if (!windows[i].used) {
+                                    windows[i].used = 1;
+                                    windows[i].type = 0;
+                                    windows[i].x = 100 + i * 18;
+                                    windows[i].y = 80 + i * 18;
+                                    windows[i].w = 320;
+                                    windows[i].h = 200;
+                                    windows[i].maximized = 0;
+                                    windows[i].z = next_z++;
+                                    active = i;
+                                    break;
+                                }
+                            }
+                        } else {
+                            break;
+                        }
                     }
                     start_menu_open = 0;
                 } else {
@@ -335,11 +442,48 @@ void gui_run_test_window(void) {
                 if (w->y + w->h > (int)screen_height) w->h = (int)screen_height - w->y;
             }
         }
-
         if (keyboard_pop_scancode(&scancode)) {
             if (scancode == 0x01) break;
-        }
+            if (scancode == 0x2A || scancode == 0x36) 
+                shift = 1;
+            else if (scancode == 0xAA || scancode == 0xB6) 
+                shift = 0;
+            else if (!(scancode & 0x80) &&
+                active >= 0 &&
+                windows[active].used &&
+                windows[active].type == 1) {
+            GuiDocument* doc = &documents[active];
+            if (scancode == 0x0E) {
+                if (doc->cursor > 0) {
+                    doc->cursor--;
+                    doc->length--;
+                    for (int j = doc->cursor; j < doc->length; j++) 
+                        doc->text[j] = doc->text[j + 1];
+                    doc->text[doc->length] = '\0';
+            }
+            } else if (scancode == 0x1C) {
+                if (doc->length < GUI_TEXT_CAPACITY - 1) {
+                    for (int j = doc->length; j > doc->cursor; j--) 
+                        doc->text[j] = doc->text[j - 1];
 
+                    doc->text[doc->cursor] = '\n';
+                    doc->cursor++;
+                    doc->length++;
+                    doc->text[doc->length] = '\0';
+                }
+            } else {
+                char c = scancode_to_char(scancode, shift);
+                if (c >= 32 && c <= 126 && doc->length < GUI_TEXT_CAPACITY - 1) {
+                    for (int j = doc->length; j > doc->cursor; j--) 
+                        doc->text[j] = doc->text[j - 1];
+                    doc->text[doc->cursor] = c;
+                    doc->cursor++;
+                    doc->length++;
+                    doc->text[doc->length] = '\0';
+                }
+            }
+        }
+    }
         asm volatile("hlt");
     }
 
