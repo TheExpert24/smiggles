@@ -4,6 +4,7 @@
 [EXTERN kernel_main]
 [EXTERN stack_top]
 
+
 section .multiboot
 align 8
 mb2_header_start:
@@ -33,12 +34,14 @@ section .text
 [GLOBAL irq0_timer_handler]
 [GLOBAL irq1_keyboard_handler]
 [GLOBAL irq12_mouse_handler]
+[GLOBAL irq5_sb16_handler]
 [GLOBAL isr_syscall_handler]
 [GLOBAL load_idt]
 
 [EXTERN timer_handler]
 [EXTERN keyboard_handler]
 [EXTERN mouse_handler]
+[EXTERN sb16_irq_handler]
 [EXTERN exception_handler]
 [EXTERN handle_page_fault]
 [EXTERN syscall_dispatch]
@@ -113,6 +116,11 @@ irq1_keyboard_handler:
 irq12_mouse_handler:
     pusha
     call mouse_handler
+    popa
+    iretd
+irq5_sb16_handler:
+    pusha
+    call sb16_irq_handler
     popa
     iretd
 

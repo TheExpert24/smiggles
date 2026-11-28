@@ -604,9 +604,10 @@ void kernel_main(unsigned int mb_magic, unsigned int mb_info_addr) {
     set_idt_entry(0x20, (unsigned int)irq0_timer_handler);
     set_idt_entry(0x21, (unsigned int)irq1_keyboard_handler);
     set_idt_entry(0x2C, (unsigned int)irq12_mouse_handler);
+    set_idt_entry(0x25, (unsigned int)irq5_sb16_handler);
     set_idt_entry_user(0x80, (unsigned int)isr_syscall_handler);
     // Unmask IRQ0 (timer), IRQ1 (keyboard), IRQ2 (cascade), and IRQ12 (mouse)
-    asm volatile("outb %0, %1" : : "a"((unsigned char)0xF8), "Nd"((uint16_t)PIC1_DATA));
+    asm volatile("outb %0, %1" : : "a"((unsigned char)0xD8), "Nd"((uint16_t)PIC1_DATA));
     asm volatile("outb %0, %1" : : "a"((unsigned char)0xEF), "Nd"((uint16_t)PIC2_DATA));
     extern struct IDT_ptr idt_ptr;
     extern struct IDT_entry idt[256];

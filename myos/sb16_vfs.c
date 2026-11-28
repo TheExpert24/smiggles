@@ -14,6 +14,7 @@ static int playback_active = 0;
 static int current_buffer_half = 0;
 static uint32_t current_sample_rate = 8000;
 static uint32_t current_byte_rate = 8000;
+static volatile uint32_t dma_irq_count = 0;
 
 static int sb16_write_dsp(uint8_t val) {
     for (uint32_t i = 0; i < 1000000; i++) {
@@ -53,8 +54,6 @@ static int sb16_open(const char* path, int flags) {
     if (inb(SB_DSP_READ) != 0xAA) return -1;
     if (sb16_write_dsp(0xD1) != 0) return -1;
     initial_skip_count = 0;
-    
-    // CRITICAL FIX: Reset all state flags cleanly on every file open
     ring_head = 0;
     ring_tail = 0;
     playback_active = 0;
@@ -70,18 +69,18 @@ static uint32_t sb16_ring_available(void) {
     uint32_t available = (ring_head >= ring_tail) ? (ring_head - ring_tail) : (65536 - ring_tail + ring_head);
     return available;
 }
-static void sb16_wait_for_chunk(uint32_t chunk_bytes) {
-    uint32_t byte_rate = current_byte_rate;
-    if (byte_rate == 0) byte_rate = 8000;
-
-    uint32_t wait_ticks = (chunk_bytes * 18u + byte_rate - 1u) / byte_rate;
-    if (wait_ticks == 0) wait_ticks = 1;
-
+static int sb16_wait_for_irq(uint32_t previous_count) {
     unsigned int start_ticks = (unsigned int)ticks;
 
-    while (((unsigned int)ticks - start_ticks) < wait_ticks) {
+    while (dma_irq_count == previous_count) {
+        if ((unsigned int)ticks - start_ticks >= 36u) {
+            return -1;
+        }
+
         asm volatile("pause");
     }
+
+    return 0;
 }
 static int sb16_pump_hardware(void) {
     uint32_t available = sb16_ring_available();
@@ -99,12 +98,12 @@ static int sb16_pump_hardware(void) {
     if (sb16_write_dsp(0x41) != 0) return -1;
     if (sb16_write_dsp((current_sample_rate >> 8) & 0xFF) != 0) return -1;
     if (sb16_write_dsp(current_sample_rate & 0xFF) != 0) return -1;
+    uint32_t irq_start = dma_irq_count;
     if (sb16_write_dsp(0xB0) != 0) return -1;
     if (sb16_write_dsp(0x10) != 0) return -1;
     if (sb16_write_dsp(0xFF) != 0) return -1;
     if (sb16_write_dsp(0x0F) != 0) return -1;
-    
-    sb16_wait_for_chunk(8192);
+    if (sb16_wait_for_irq(irq_start) != 0) return -1;
 
     current_buffer_half = (current_buffer_half == 0) ? 1 : 0;
     return 1;
@@ -153,7 +152,11 @@ void sb16_set_sample_rate(uint32_t rate) {
 void sb16_set_stream_rate(uint32_t rate) {
     if (rate > 0) current_byte_rate = rate;
 }
-
+void sb16_irq_handler(void) {
+    inb(0x22F);
+    dma_irq_count++;
+    outb(PIC_EOI, PIC1_COMMAND);
+}
 static int sb16_close(int backend_fd) {
     (void)backend_fd;
     if (sb16_ring_available() > 0) {
@@ -176,6 +179,11 @@ static int sb16_close(int backend_fd) {
             sb16_pump_hardware();
         }
     }
+    char debug[64] = "SB16 IRQ count: ";
+    char count[16];
+    int_to_str((int)dma_irq_count, count);
+    str_concat(debug, count);
+    log_write(LOG_LEVEL_INFO, debug);
     playback_active = 0;
     ring_head = 0;
     ring_tail = 0;

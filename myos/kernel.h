@@ -379,20 +379,12 @@ int memory_smoke_test(void);
 void* kmalloc(unsigned int size);
 void kfree(void* ptr);
 unsigned int paging_get_kernel_directory(void);
-unsigned int paging_create_process_directory(unsigned int user_code_addr,
-                                             unsigned int user_stack_base,
-                                             unsigned int user_stack_size);
+unsigned int paging_create_process_directory(unsigned int user_code_addr, unsigned int user_stack_base,unsigned int user_stack_size);
 void paging_destroy_process_directory(unsigned int page_directory);
 void paging_switch_directory(unsigned int page_directory);
 int paging_mark_user_range(unsigned int page_directory, unsigned int start, unsigned int size);
-int paging_get_mapping(unsigned int page_directory,
-                       unsigned int vaddr,
-                       unsigned int* out_phys,
-                       unsigned int* out_flags);
-int paging_map_page(unsigned int page_directory,
-                    unsigned int vaddr,
-                    unsigned int phys,
-                    unsigned int flags);
+int paging_get_mapping(unsigned int page_directory,unsigned int vaddr,unsigned int* out_phys,unsigned int* out_flags);
+int paging_map_page(unsigned int page_directory,unsigned int vaddr,unsigned int phys,unsigned int flags);
 int paging_set_page_writable(unsigned int page_directory, unsigned int vaddr, int writable);
 void paging_inc_page_ref(unsigned int phys_addr);
 unsigned int paging_get_page_ref(unsigned int phys_addr);
@@ -419,16 +411,13 @@ extern void irq0_timer_handler();
 extern void irq1_keyboard_handler();
 extern void irq12_mouse_handler();
 extern void isr_syscall_handler();
+void sb16_irq_handler(void);
+extern void irq5_sb16_handler(void);
 
 // Syscalls
 // saved_cs: CS selector at the time int 0x80 fired (bits 1:0 = RPL).
 // Ring-3 callers are automatically routed to linux_syscall_dispatch().
-unsigned int syscall_dispatch(unsigned int number,
-                              unsigned int arg0,
-                              unsigned int arg1,
-                              unsigned int arg2,
-                              unsigned int saved_cs,
-                              IRQContext* ctx);
+unsigned int syscall_dispatch(unsigned int number,unsigned int arg0,unsigned int arg1,unsigned int arg2,unsigned int saved_cs,IRQContext* ctx);
 unsigned int syscall_invoke(unsigned int number);
 unsigned int syscall_invoke1(unsigned int number, unsigned int arg0);
 unsigned int syscall_invoke2(unsigned int number, unsigned int arg0, unsigned int arg1);
@@ -638,13 +627,7 @@ int tcp_get_conn_info(int index, TCPConnInfo* out_info);
 // Unified network dispatcher
 int net_poll_once(void);
 
-// ── Real context switch (kernel_entry.asm) ──────────────────────────────────
-// Saves edi/esi/ebx/ebp/eflags on the current stack, stores ESP in
-// *save_esp, loads load_esp, restores the saved frame and returns into
-// the new process.  Used by context_switch() in process.c.
-extern void context_switch_asm(unsigned int* save_esp,
-                               unsigned int load_esp,
-                               unsigned int load_cr3);
+extern void context_switch_asm(unsigned int* save_esp,unsigned int load_esp,unsigned int load_cr3);
 
 // Set TSS.esp0 for ring transitions into kernel mode.
 void protection_set_kernel_stack(unsigned int kernel_esp0);
@@ -654,9 +637,6 @@ void protection_set_kernel_stack(unsigned int kernel_esp0);
 extern void jump_to_ring3(unsigned int entry, unsigned int user_esp);
 extern void resume_from_irq_context(IRQContext* ctx);
 
-// ── Linux i386 syscall ABI compatibility ─────────────────────────────────────
-// When a ring-3 process calls  int 0x80  with eax = one of these numbers
-// we dispatch through linux_syscall_dispatch() instead of our own table.
 #define LINUX_SYS_EXIT          1
 #define LINUX_SYS_PIPE          42
 #define LINUX_SYS_UNLINK        10
@@ -745,8 +725,6 @@ unsigned int linux_syscall_dispatch(unsigned int number,
                                     IRQContext* ctx);
 
 #endif // KERNEL_H
-
-// I/O port functions for ATA
 static inline unsigned char inb(unsigned short port) {
     unsigned char ret;
     asm volatile ("inb %1, %0" : "=a"(ret) : "Nd"(port));
